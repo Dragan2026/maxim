@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MAXIM — Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    background: #09090b;
+    color: #e4e4e7;
+    font-size: 13px;
+    overflow-x: hidden;
+  }
+
+  /* Header */
+  .header {
+    background: #0c0c0f;
+    border-bottom: 2px solid #3b82f6;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 12px;
+  }
+  .header .logo {
+    color: #3b82f6;
+    font-size: 24px;
+    font-weight: bold;
+    letter-spacing: 6px;
+  }
+  .header .sep { color: #27272a; font-size: 24px; }
+  .header .subtitle { color: #71717a; font-size: 13px; }
+  .header .spacer { flex: 1; }
+  .header .ai-badge {
+    color: #4ade80; font-size: 12px; padding: 4px 12px;
+    background: #0d2818; border-radius: 12px;
+  }
+
+  /* Layout */
+  .body { display: flex; height: calc(100vh - 56px); }
+
+  /* Sidebar */
+  .sidebar {
+    width: 240px;
+    background: #0c0c0f;
+    border-right: 1px solid #18181b;
+    padding: 12px 8px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .sidebar .section-title {
+    color: #3f3f46;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 3px;
+    margin: 12px 0 6px 4px;
+  }
+  .sidebar .nav-item {
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin: 2px 0;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .sidebar .nav-item:hover { background: #18181b; }
+  .sidebar .nav-item.active { background: #1e3a5f; color: #60a5fa; }
+  .sidebar .divider { height: 1px; background: #18181b; margin: 10px 0; }
+  .sidebar .cat-item {
+    padding: 6px 12px;
+    border-radius: 6px;
+    margin: 1px 0;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .sidebar .cat-item:hover { background: #18181b; }
+  .sidebar .stats { color: #3f3f46; font-size: 11px; padding: 8px; margin-top: auto; }
+
+  /* Content */
+  .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex;
+    background: #0c0c0f;
+    border-bottom: 1px solid #18181b;
+    padding: 0 8px;
+  }
+  .tab {
+    padding: 10px 22px;
+    color: #71717a;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: #fafafa; background: #18181b; }
+  .tab.active { color: #60a5fa; border-bottom-color: #60a5fa; }
+
+  /* Tab content */
+  .tab-content { flex: 1; overflow-y: auto; padding: 16px; display: none; }
+  .tab-content.active { display: block; }
+
+  /* Prompt */
+  .prompt-frame {
+    background: #0c0c0f;
+    border: 1px solid #18181b;
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .prompt-hint { color: #60a5fa; font-size: 12px; margin-bottom: 4px; }
+  .prompt-examples { color: #3f3f46; font-size: 11px; margin-bottom: 8px; }
+  .prompt-examples span { color: #71717a; }
+  .prompt-row { display: flex; gap: 8px; }
+  .prompt-input {
+    flex: 1;
+    background: #0c0c0f;
+    border: 2px solid #27272a;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 15px;
+    color: #fafafa;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .prompt-input:focus { border-color: #3b82f6; background: #18181b; }
+  .prompt-input::placeholder { color: #3f3f46; }
+  .btn {
+    border: none; border-radius: 6px; padding: 8px 18px; font-weight: bold;
+    font-size: 13px; cursor: pointer; font-family: inherit; transition: all 0.15s;
+  }
+  .btn-primary { background: #3b82f6; color: #fff; }
+  .btn-primary:hover { background: #4da6ff; }
+  .btn-danger { background: #da3633; color: #fff; }
+  .btn-danger:hover { background: #f85149; }
+  .btn-ghost {
+    background: transparent; border: 1px solid #27272a; color: #71717a;
+  }
+  .btn-ghost:hover { border-color: #60a5fa; color: #60a5fa; }
+  .btn-success { background: #238636; color: #fff; }
+  .btn-online {
+    background: transparent; border: 1px solid #d29922; color: #d29922;
+    border-radius: 4px; padding: 4px 12px; font-size: 11px;
+  }
+  .btn-online:hover { background: #2d1f00; }
+
+  /* Suggestion */
+  .suggestion-frame {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .suggestion-title { color: #60a5fa; font-size: 16px; font-weight: bold; }
+  .suggestion-desc { color: #71717a; font-size: 12px; }
+  .suggestion-btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+  /* Terminal */
+  .terminal {
+    background: #000000;
+    color: #33ff33;
+    border: 1px solid #18181b;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    flex: 1;
+    min-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  .terminal .cmd { color: #60a5fa; }
+  .terminal .ok { color: #4ade80; }
+  .terminal .err { color: #f85149; }
+  .terminal .dim { color: #3f3f46; }
+
+  /* Quick bar */
+  .quick-bar {
+    display: flex; gap: 6px; margin-top: 8px;
+  }
+
+  /* Workflow cards */
+  .phase-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  .phase-card {
+    background: #0c0c0f; border: 1px solid #18181b; border-radius: 10px;
+    padding: 14px; cursor: pointer; transition: all 0.15s;
+  }
+  .phase-card:hover { border-color: #60a5fa; background: #18181b; }
+  .phase-icon { font-size: 28px; }
+  .phase-name { font-size: 17px; font-weight: bold; }
+  .phase-desc { color: #71717a; font-size: 12px; margin-top: 4px; }
+  .phase-meta { font-size: 11px; margin-top: 6px; }
+
+  /* Step group */
+  .step-group {
+    border: 1px solid rgba(26, 140, 255, 0.25);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 14px;
+  }
+  .step-title { font-weight: bold; font-size: 14px; margin-bottom: 8px; }
+  .step-desc { color: #71717a; font-size: 12px; margin-bottom: 10px; }
+
+  .cmd-row {
+    display: flex; align-items: center; gap: 8px; padding: 4px 0;
+    border-bottom: 1px solid #18181b10;
+  }
+  .tool-tag {
+    color: #60a5fa; background: #1e3a5f; padding: 2px 8px;
+    border-radius: 4px; font-size: 11px; white-space: nowrap;
+  }
+  .cmd-desc { color: #e4e4e7; min-width: 200px; font-size: 12px; }
+  .cmd-code { color: #33ff33; font-size: 11px; flex: 1; }
+  .online-section { margin-top: 10px; }
+  .online-label { color: #d29922; font-weight: bold; margin-bottom: 6px; }
+  .online-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* Tool grid */
+  .tool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .tool-card {
+    background: #0c0c0f; border: 1px solid #18181b; border-radius: 10px;
+    padding: 12px; transition: all 0.15s;
+  }
+  .tool-card:hover { border-color: #60a5fa; background: #18181b; }
+  .tool-name { font-size: 15px; font-weight: bold; }
+  .tool-desc { color: #71717a; font-size: 11px; margin-top: 2px; }
+  .tool-cat { font-size: 10px; margin-top: 2px; }
+  .tool-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+  /* Online page */
+  .online-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px; }
+  .online-card {
+    background: #0c0c0f; border: 1px solid #18181b; border-radius: 10px;
+    padding: 12px; cursor: pointer; transition: all 0.15s;
+  }
+  .online-card:hover { border-color: #d29922; background: #18181b; }
+  .online-name { color: #d29922; font-size: 14px; font-weight: bold; }
+  .online-desc { color: #71717a; font-size: 11px; margin-top: 2px; }
+
+  .heading { color: #fafafa; font-size: 20px; font-weight: bold; margin-bottom: 4px; }
+  .subheading { color: #71717a; font-size: 14px; margin-bottom: 8px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #0a0e14; }
+  ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <span class="logo">MAXIM</span>
+  <span class="sep">|</span>
+  <span class="subtitle">Penetration Testing Command Center</span>
+  <span class="spacer"></span>
+  <span class="ai-badge">AI: Online (Mistral)</span>
+</div>
+
+<div class="body">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="section-title">PENTEST PHASES</div>
+    <div class="nav-item active">🔍  Reconnaissance</div>
+    <div class="nav-item">📋  Enumeration</div>
+    <div class="nav-item">🐛  Vulnerability Scanning</div>
+    <div class="nav-item">💥  Exploitation</div>
+    <div class="nav-item">🏴  Post-Exploitation</div>
+    <div class="nav-item">📡  Wireless Attacks</div>
+    <div class="nav-item">📄  Reporting & Cleanup</div>
+
+    <div class="divider"></div>
+
+    <div class="section-title">TOOL CATEGORIES</div>
+    <div class="cat-item">Network Scanning</div>
+    <div class="cat-item">Wireless Attacks</div>
+    <div class="cat-item">Exploitation</div>
+    <div class="cat-item">Web App Testing</div>
+    <div class="cat-item">Password Attacks</div>
+    <div class="cat-item">Sniffing & Spoofing</div>
+    <div class="cat-item">Forensics</div>
+    <div class="cat-item">Reverse Engineering</div>
+    <div class="cat-item">Vuln Analysis</div>
+    <div class="cat-item">System & Utilities</div>
+
+    <div style="flex:1;"></div>
+    <button class="btn btn-ghost" style="width:100%;margin-top:12px;">Online Resources</button>
+    <div class="stats">Session: 7 commands</div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+    <!-- TABS -->
+    <div class="tab-bar">
+      <div class="tab active" onclick="showTab(0)">  Command Center  </div>
+      <div class="tab" onclick="showTab(1)">  Workflows  </div>
+      <div class="tab" onclick="showTab(2)">  Tools  </div>
+      <div class="tab" onclick="showTab(3)">  AI Assistant  </div>
+      <div class="tab" onclick="showTab(4)">  Online  </div>
+      <div class="tab" onclick="showTab(5)">  Log  </div>
+    </div>
+
+    <!-- TAB 0: COMMAND CENTER -->
+    <div class="tab-content active" id="tab0">
+      <div class="prompt-frame">
+        <div class="prompt-hint">Type naturally -- Maxim knows which tool and CLI command to use.</div>
+        <div class="prompt-examples">Examples: <span>"scan network 192.168.1.0/24" | "put wlan1 in monitor mode" | "find directories on target.com" | "install nmap" | "who is on my network"</span></div>
+        <div class="prompt-row">
+          <input class="prompt-input" placeholder="What do you want to do?..." value="scan network 192.168.1.0/24">
+          <button class="btn btn-primary" style="min-width:100px;height:42px;">Execute</button>
+          <button class="btn btn-danger" style="min-width:70px;height:42px;opacity:0.5;">Stop</button>
+        </div>
+      </div>
+
+      <!-- Suggestion (visible after query) -->
+      <div class="suggestion-frame">
+        <span class="suggestion-title">nmap</span>
+        <span class="suggestion-desc"> -- Network exploration and security auditing [ROOT]</span>
+        <div class="suggestion-btns">
+          <button class="btn btn-ghost">Quick scan</button>
+          <button class="btn btn-ghost">Full port scan</button>
+          <button class="btn btn-ghost">Ping sweep</button>
+          <button class="btn btn-ghost">OS detection</button>
+          <button class="btn btn-ghost">Aggressive scan</button>
+          <button class="btn btn-ghost">Vuln scan</button>
+        </div>
+      </div>
+
+      <!-- Terminal -->
+      <div class="terminal">
+<span class="dim">======================================================================</span>
+<span class="cmd"> [14:32:07]  $ nmap -sn 192.168.1.0/24</span>
+<span class="dim">======================================================================</span>
+
+Starting Nmap 7.94SVN ( https://nmap.org ) at 2026-03-26 14:32 EET
+Nmap scan report for 192.168.1.1
+Host is up (0.0034s latency).
+MAC Address: AA:BB:CC:11:22:33 (Tp-link Technologies)
+Nmap scan report for 192.168.1.15
+Host is up (0.012s latency).
+MAC Address: DD:EE:FF:44:55:66 (Samsung Electronics)
+Nmap scan report for 192.168.1.42
+Host is up (0.0087s latency).
+MAC Address: 11:22:33:AA:BB:CC (Apple)
+Nmap scan report for 192.168.1.100
+Host is up.
+Nmap done: 256 IP addresses (4 hosts up) scanned in 2.31 seconds
+
+<span class="ok">[OK] Completed in 2.3s</span>
+      </div>
+
+      <div class="quick-bar">
+        <button class="btn btn-ghost">My IP</button>
+        <button class="btn btn-ghost">Interfaces</button>
+        <button class="btn btn-ghost">Ports</button>
+        <button class="btn btn-ghost">Processes</button>
+        <button class="btn btn-ghost">LAN Scan</button>
+        <button class="btn btn-ghost">Routing</button>
+        <button class="btn btn-ghost">DNS</button>
+      </div>
+    </div>
+
+    <!-- TAB 1: WORKFLOWS -->
+    <div class="tab-content" id="tab1">
+      <div class="heading">Pentest Workflow Phases</div>
+      <div class="subheading">Select a phase to see step-by-step suggestions with CLI commands and online tools.</div>
+
+      <div class="phase-grid">
+        <div class="phase-card" onclick="showTab(6)">
+          <span class="phase-icon">🔍</span>
+          <span class="phase-name" style="color:#3498db;">Reconnaissance</span>
+          <div class="phase-desc">Gather info about the target before engaging</div>
+          <div class="phase-meta" style="color:#3498db;">3 steps | 19 commands | 12 online tools</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Reconnaissance</button>
+        </div>
+        <div class="phase-card">
+          <span class="phase-icon">📋</span>
+          <span class="phase-name" style="color:#2ecc71;">Enumeration</span>
+          <div class="phase-desc">Deep-dive into discovered services for attack vectors</div>
+          <div class="phase-meta" style="color:#2ecc71;">5 steps | 28 commands | 4 online tools</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Enumeration</button>
+        </div>
+        <div class="phase-card">
+          <span class="phase-icon">🐛</span>
+          <span class="phase-name" style="color:#e67e22;">Vulnerability Scanning</span>
+          <div class="phase-desc">Identify known vulnerabilities in discovered services</div>
+          <div class="phase-meta" style="color:#e67e22;">2 steps | 11 commands | 6 online tools</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Vuln Scanning</button>
+        </div>
+        <div class="phase-card">
+          <span class="phase-icon">💥</span>
+          <span class="phase-name" style="color:#e74c3c;">Exploitation</span>
+          <div class="phase-desc">Leverage vulnerabilities to gain access</div>
+          <div class="phase-meta" style="color:#e74c3c;">3 steps | 16 commands | 8 online tools</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Exploitation</button>
+        </div>
+        <div class="phase-card">
+          <span class="phase-icon">🏴</span>
+          <span class="phase-name" style="color:#9b59b6;">Post-Exploitation</span>
+          <div class="phase-desc">Maintain access, escalate privileges, move laterally</div>
+          <div class="phase-meta" style="color:#9b59b6;">3 steps | 20 commands | 3 online tools</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Post-Exploit</button>
+        </div>
+        <div class="phase-card">
+          <span class="phase-icon">📡</span>
+          <span class="phase-name" style="color:#1abc9c;">Wireless Attacks</span>
+          <div class="phase-desc">WiFi recon, capture, and cracking</div>
+          <div class="phase-meta" style="color:#1abc9c;">4 steps | 20 commands | 1 online tool</div>
+          <button class="btn btn-primary" style="width:100%;margin-top:8px;padding:6px;">Open Wireless</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: TOOLS -->
+    <div class="tab-content" id="tab2">
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input class="prompt-input" style="font-size:13px;padding:8px 12px;" placeholder="Search tools...">
+        <button class="btn btn-success">Install All Tools</button>
+      </div>
+      <div class="tool-grid">
+        <div class="tool-card">
+          <div class="tool-name" style="color:#3498db;">nmap</div>
+          <div class="tool-desc">Network exploration and security auditing</div>
+          <div class="tool-cat" style="color:#3498db;">Network Scanning</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name" style="color:#e74c3c;">aircrack-ng</div>
+          <div class="tool-desc">WiFi security auditing suite</div>
+          <div class="tool-cat" style="color:#e74c3c;">Wireless Attacks</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name" style="color:#e67e22;">metasploit</div>
+          <div class="tool-desc">Penetration testing framework</div>
+          <div class="tool-cat" style="color:#e67e22;">Exploitation</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name" style="color:#2ecc71;">nikto</div>
+          <div class="tool-desc">Web server vulnerability scanner</div>
+          <div class="tool-cat" style="color:#2ecc71;">Web App Testing</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name" style="color:#9b59b6;">hydra</div>
+          <div class="tool-desc">Network login brute forcer</div>
+          <div class="tool-cat" style="color:#9b59b6;">Password Attacks</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name" style="color:#f39c12;">wireshark</div>
+          <div class="tool-desc">Network protocol analyzer</div>
+          <div class="tool-cat" style="color:#f39c12;">Sniffing & Spoofing</div>
+          <div class="tool-actions">
+            <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Use</button>
+            <button class="btn btn-ghost" style="padding:4px 14px;font-size:12px;">Install</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: AI -->
+    <div class="tab-content" id="tab3">
+      <!-- Provider row -->
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+        <span>Provider:</span>
+        <select id="providerSelect" onchange="updateProviderUI()" style="background:#0d1117;color:#fafafa;border:1px solid #27272a;border-radius:6px;padding:6px 12px;font-family:inherit;min-width:180px;">
+          <option value="ollama">Ollama (Offline)  [LOCAL]</option>
+          <option value="openai">OpenAI  [ONLINE]</option>
+          <option value="anthropic" selected>Anthropic Claude  [ONLINE]</option>
+          <option value="gemini">Google Gemini  [ONLINE]</option>
+          <option value="groq">Groq  [ONLINE]</option>
+          <option value="openrouter">OpenRouter  [ONLINE]</option>
+        </select>
+        <span>Model:</span>
+        <select id="modelSelect" style="background:#0d1117;color:#fafafa;border:1px solid #27272a;border-radius:6px;padding:6px 12px;font-family:inherit;min-width:220px;">
+          <option>claude-sonnet-4-6</option>
+          <option>claude-haiku-4-5-20251001</option>
+          <option>claude-opus-4-6</option>
+        </select>
+        <button class="btn btn-ghost" style="padding:6px 12px;">API Key</button>
+        <button class="btn btn-ghost" style="padding:6px 12px;">Refresh</button>
+        <button class="btn btn-ghost" style="padding:6px 12px;">Clear Chat</button>
+        <span style="margin-left:auto;color:#4ade80;font-size:11px;padding:4px 10px;background:#0d2818;border-radius:10px;">Anthropic Claude: claude-sonnet-4-6</span>
+      </div>
+      <!-- Info bar -->
+      <div style="background:#18181b;border:1px solid #27272a;border-radius:6px;padding:8px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;"><span style="color:#4ade80;">Connected.</span> <span style="color:#71717a;">Anthropic Claude -- excellent reasoning & code</span></span>
+      </div>
+      <div style="background:#010409;border:1px solid #18181b;border-radius:8px;padding:16px;flex:1;min-height:400px;">
+        <div style="background:#1e3a5f;border-radius:10px;padding:10px;margin:6px 60px 6px 6px;">
+          <b style="color:#60a5fa;">You:</b>
+          <span style="color:#fafafa;">How do I scan a network for live hosts and then check for open ports?</span>
+        </div>
+        <div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 60px;">
+          <b style="color:#4ade80;">Maxim AI:</b><br>
+          <span style="color:#e4e4e7;">
+            Here's a two-step approach:<br><br>
+            <b>Step 1: Discover live hosts</b><br>
+            <code style="color:#33ff33;">nmap -sn 192.168.1.0/24 -oN live_hosts.txt</code><br><br>
+            <b>Step 2: Port scan discovered hosts</b><br>
+            <code style="color:#33ff33;">nmap -sV -sC -iL live_hosts.txt -oA full_scan</code><br><br>
+            This will first ping sweep the /24 subnet, then run version detection + default scripts on all live hosts. Results saved to files for later analysis.<br><br>
+            Alternatives: <b>masscan</b> for faster scanning, <b>netdiscover</b> for ARP-based discovery on local networks.
+          </span>
+        </div>
+        <div style="background:#1e3a5f;border-radius:10px;padding:10px;margin:6px 60px 6px 6px;">
+          <b style="color:#60a5fa;">You:</b>
+          <span style="color:#fafafa;">What's the difference between aircrack-ng and wifite?</span>
+        </div>
+        <div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 60px;">
+          <b style="color:#4ade80;">Maxim AI:</b><br>
+          <span style="color:#e4e4e7;">
+            <b>aircrack-ng</b> is a manual suite — you control each step (monitor mode, capture, deauth, crack). More flexible, more control.<br><br>
+            <b>wifite</b> automates the entire process. It handles monitor mode, scans, attacks WPA/WPS, and cracks — all in one command.<br><br>
+            Use <b>aircrack-ng</b> when you need precision. Use <b>wifite</b> for quick automated audits.
+          </span>
+        </div>
+      </div>
+      <div class="prompt-row" style="margin-top:8px;">
+        <input class="prompt-input" placeholder="Ask Maxim AI about pentesting, tools, commands...">
+        <button class="btn btn-primary" style="height:42px;">Send</button>
+      </div>
+    </div>
+
+    <!-- TAB 4: ONLINE -->
+    <div class="tab-content" id="tab4">
+      <div class="heading">Online Pentesting Resources</div>
+      <div class="subheading">Click to open in browser. Complements local tools with OSINT, hash lookups, and external scanning.</div>
+      <div class="online-grid">
+        <div class="online-card">
+          <div class="online-name">Shodan</div>
+          <div class="online-desc">Internet-connected device search engine</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">VirusTotal</div>
+          <div class="online-desc">File/URL/IP malware analysis</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">Exploit-DB</div>
+          <div class="online-desc">Public exploit archive</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">CrackStation</div>
+          <div class="online-desc">Free online hash lookup</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">GTFOBins</div>
+          <div class="online-desc">Unix binary exploitation reference</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">CyberChef</div>
+          <div class="online-desc">Data encoding/decoding/analysis</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">RevShells</div>
+          <div class="online-desc">Reverse shell one-liner generator</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">HackTricks</div>
+          <div class="online-desc">Comprehensive hacking book</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+        <div class="online-card">
+          <div class="online-name">crt.sh</div>
+          <div class="online-desc">Certificate transparency log search</div>
+          <button class="btn btn-online" style="margin-top:6px;width:100%;">Open in Browser</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: LOG -->
+    <div class="tab-content" id="tab5">
+      <div class="heading">Session Command Log</div>
+      <div class="terminal" style="min-height:500px;">
+[2026-03-26T14:30:12] (ip) exit=0 dur=0.05s
+  $ ip -c addr show
+
+[2026-03-26T14:30:45] (airmon-ng) exit=0 dur=0.12s
+  $ airmon-ng
+
+[2026-03-26T14:31:03] (airmon-ng) exit=0 dur=1.23s
+  $ airmon-ng start wlan0
+
+[2026-03-26T14:31:15] (airodump-ng) exit=0 dur=15.4s
+  $ airodump-ng wlan0mon
+
+[2026-03-26T14:32:07] (nmap) exit=0 dur=2.31s
+  $ nmap -sn 192.168.1.0/24
+
+[2026-03-26T14:33:22] (nikto) exit=0 dur=45.7s
+  $ nikto -h http://192.168.1.42
+
+[2026-03-26T14:35:01] (gobuster) exit=0 dur=12.8s
+  $ gobuster dir -u http://192.168.1.42 -w /usr/share/wordlists/dirb/common.txt
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <button class="btn btn-ghost">Refresh</button>
+        <button class="btn btn-ghost">Clear</button>
+      </div>
+    </div>
+
+    <!-- TAB 6: RECON DETAIL (expanded workflow) -->
+    <div class="tab-content" id="tab6">
+      <button class="btn btn-ghost" onclick="showTab(1)" style="margin-bottom:8px;">< Back to Overview</button>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:28px;">🔍</span>
+        <span style="color:#3498db;font-size:22px;font-weight:bold;">Reconnaissance</span>
+      </div>
+      <div class="subheading">Gather information about the target before engaging</div>
+
+      <!-- Step 1 -->
+      <div class="step-group" style="border-color: rgba(52,152,219,0.25);">
+        <div class="step-title" style="color:#3498db;">Step 1: Passive OSINT</div>
+        <div class="step-desc">Gather info without touching the target</div>
+
+        <div style="color:#4ade80;font-weight:bold;margin-bottom:6px;">CLI Commands:</div>
+
+        <div class="cmd-row">
+          <span class="tool-tag">whois</span>
+          <span class="cmd-desc">Domain registration info</span>
+          <code class="cmd-code">whois {target}</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">theHarvester</span>
+          <span class="cmd-desc">Emails, subdomains, IPs</span>
+          <code class="cmd-code">theHarvester -d {target} -b all -l 500</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">dnsenum</span>
+          <span class="cmd-desc">DNS records & zone transfers</span>
+          <code class="cmd-code">dnsenum {target}</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">whatweb</span>
+          <span class="cmd-desc">Web technology fingerprint</span>
+          <code class="cmd-code">whatweb -v {target}</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+
+        <div class="online-section">
+          <div class="online-label">Online Tools:</div>
+          <div class="online-btns">
+            <button class="btn btn-online">Shodan</button>
+            <button class="btn btn-online">Censys</button>
+            <button class="btn btn-online">crt.sh</button>
+            <button class="btn btn-online">SecurityTrails</button>
+            <button class="btn btn-online">Hunter.io</button>
+            <button class="btn btn-online">BuiltWith</button>
+            <button class="btn btn-online">Wayback Machine</button>
+            <button class="btn btn-online">VirusTotal</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="step-group" style="border-color: rgba(52,152,219,0.25);">
+        <div class="step-title" style="color:#3498db;">Step 2: Active Discovery</div>
+        <div class="step-desc">Direct interaction with the target</div>
+
+        <div style="color:#4ade80;font-weight:bold;margin-bottom:6px;">CLI Commands:</div>
+
+        <div class="cmd-row">
+          <span class="tool-tag">nmap</span>
+          <span class="cmd-desc">Ping sweep -- find live hosts</span>
+          <code class="cmd-code">nmap -sn {target}/24</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">nmap</span>
+          <span class="cmd-desc">Service version + OS detection</span>
+          <code class="cmd-code">nmap -sV -sC -O {target}</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">masscan</span>
+          <span class="cmd-desc">Fast mass port scan</span>
+          <code class="cmd-code">masscan {target}/24 --top-ports 1000 --rate 1000</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">netdiscover</span>
+          <span class="cmd-desc">ARP-based host discovery</span>
+          <code class="cmd-code">netdiscover -r {target}/24</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+
+        <div class="online-section">
+          <div class="online-label">Online Tools:</div>
+          <div class="online-btns">
+            <button class="btn btn-online">Nmap Online</button>
+            <button class="btn btn-online">MXToolbox</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="step-group" style="border-color: rgba(52,152,219,0.25);">
+        <div class="step-title" style="color:#3498db;">Step 3: Subdomain Enumeration</div>
+        <div class="step-desc">Find all subdomains of the target</div>
+
+        <div style="color:#4ade80;font-weight:bold;margin-bottom:6px;">CLI Commands:</div>
+
+        <div class="cmd-row">
+          <span class="tool-tag">gobuster</span>
+          <span class="cmd-desc">DNS brute force subdomains</span>
+          <code class="cmd-code">gobuster dns -d {target} -w subdomains-top1million-5000.txt</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+        <div class="cmd-row">
+          <span class="tool-tag">amass</span>
+          <span class="cmd-desc">Deep subdomain enumeration</span>
+          <code class="cmd-code">amass enum -d {target}</code>
+          <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;">Run</button>
+        </div>
+
+        <div class="online-section">
+          <div class="online-label">Online Tools:</div>
+          <div class="online-btns">
+            <button class="btn btn-online">crt.sh</button>
+            <button class="btn btn-online">Subdomainfinder</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function showTab(n) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab' + n).classList.add('active');
+  if (n <= 5) document.querySelectorAll('.tab')[n].classList.add('active');
+  else document.querySelectorAll('.tab')[1].classList.add('active');
+}
+
+const providerModels = {
+  ollama: ['mistral:latest', 'llama3:latest', 'phi3:latest', 'gemma2:latest', 'codellama:latest'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-mini'],
+  anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-6'],
+  gemini: ['gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+  openrouter: ['anthropic/claude-sonnet-4-6', 'openai/gpt-4o', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.3-70b-instruct:free'],
+};
+
+function updateProviderUI() {
+  const sel = document.getElementById('providerSelect').value;
+  const modelSel = document.getElementById('modelSelect');
+  modelSel.innerHTML = '';
+  (providerModels[sel] || []).forEach(m => {
+    const opt = document.createElement('option');
+    opt.textContent = m;
+    modelSel.appendChild(opt);
+  });
+}
+</script>
+</body>
+</html>
