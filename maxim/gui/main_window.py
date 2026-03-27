@@ -457,32 +457,37 @@ class MaximWindow(QMainWindow):
             cleaned = response.strip()
             # Remove ```bash ... ``` or ``` ... ``` wrappers
             cleaned = re.sub(r'^```\w*\n?', '', cleaned)
-            cleaned = re.sub(r'\n?```$', '', cleaned)
+            cleaned = re.sub(r'\n?```\s*$', '', cleaned)
             cleaned = cleaned.strip()
 
-            # Remove leading $ or >
-            lines = []
+            if not cleaned:
+                self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                return
+
+            # If it contains heredoc/EOF/cat>, run the whole thing as-is via bash
+            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned or "echo '" in cleaned:
+                cmd = cleaned
+                self.terminal.appendPlainText(f"⚡ Running command...\n")
+                self._execute_command(f"bash -c {repr(cmd)}")
+                return
+
+            # Split into lines, clean each
+            commands = []
             for line in cleaned.split("\n"):
                 line = line.strip()
-                if not line:
+                if not line or line.startswith("#"):
                     continue
                 line = re.sub(r'^[$>]\s*', '', line)
                 line = line.strip('`').strip()
                 if line:
-                    lines.append(line)
+                    commands.append(line)
 
-            if not lines:
+            if not commands:
                 self.terminal.appendPlainText(f"\n[AI] {response}\n")
                 return
 
-            # Join all lines as one command (could be multi-line with &&)
-            # If it looks like a single coherent command, use the whole thing
-            cmd = " && ".join(lines) if len(lines) > 1 and not any("&&" in l or ";" in l for l in lines) else "\n".join(lines)
-
-            # For multi-line (heredoc/cat EOF), use the full cleaned text
-            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
-                cmd = cleaned
-
+            # Run all commands chained
+            cmd = " && ".join(commands)
             self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
             self._execute_command(cmd)
 
