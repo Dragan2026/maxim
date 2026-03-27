@@ -635,23 +635,40 @@ class MaximWindow(QMainWindow):
         if not stripped:
             return None
 
+        # Skip known john/hashcat status lines immediately
+        skip_patterns = [
+            'Using default', 'Loaded ', 'No password hashes',
+            'password hash', 'left to crack', 'Proceeding',
+            'Press ', 'Session ', 'Status', 'Speed', 'Remaining',
+            'Note:', 'Warning:', 'Cost ', 'Will run', 'Approaching',
+            'guesses:', 'see FAQ', 'OMP ', 'Node ',
+        ]
+        for sp in skip_patterns:
+            if sp in stripped:
+                return None
+
         # aircrack-ng: "KEY FOUND! [ mysecretpassword ]"
         m = re.search(r'KEY FOUND!\s*\[\s*(.+?)\s*\]', stripped)
         if m:
             return m.group(1)
 
-        # john --show / hashcat: "hash:password" (hash is hex 16+ chars)
-        m = re.match(r'^[a-fA-F0-9]{16,}:(.+)$', stripped)
+        # hashcat output: "hash:password" (hash is hex 32+ chars)
+        m = re.match(r'^[a-fA-F0-9]{32,}:(.+)$', stripped)
         if m:
             return m.group(1)
 
-        # john --show: "?:password" or "user:password" (short prefix before colon)
-        m = re.match(r'^[^:]{1,64}:(.+)$', stripped)
+        # john --show: "?:password" (? is placeholder when no username)
+        m = re.match(r'^\?:(.+)$', stripped)
         if m:
-            pw = m.group(1)
-            # Filter out status/info lines (contain spaces or known non-password patterns)
-            if not any(x in pw for x in ['password hash', 'left to crack', 'No password', 'Loaded ', 'Using ']):
-                return pw
+            return m.group(1)
+
+        # john --show with $hash$ format: "$type$salt$hash:password"
+        m = re.match(r'^\$[^:]+:(.+)$', stripped)
+        if m:
+            return m.group(1)
+
+        # hashcat --show: "hash:password" where hash starts with $
+        # Already covered above
 
         return None
 
