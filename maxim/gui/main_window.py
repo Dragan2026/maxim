@@ -37,26 +37,48 @@ class DropTerminal(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self._normal_style = ""
+
+    def setStyleSheet(self, style):
+        super().setStyleSheet(style)
+        if "border: 1px solid #18181b" in style:
+            self._normal_style = style
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-            self.setStyleSheet(self.styleSheet().replace("border: 1px solid #18181b", "border: 2px solid #3b82f6"))
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            if self._normal_style:
+                super().setStyleSheet(self._normal_style.replace(
+                    "border: 1px solid #18181b", "border: 2px solid #3b82f6"
+                ))
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event):
-        self.setStyleSheet(self.styleSheet().replace("border: 2px solid #3b82f6", "border: 1px solid #18181b"))
+        if self._normal_style:
+            super().setStyleSheet(self._normal_style)
 
     def dropEvent(self, event):
-        self.setStyleSheet(self.styleSheet().replace("border: 2px solid #3b82f6", "border: 1px solid #18181b"))
+        if self._normal_style:
+            super().setStyleSheet(self._normal_style)
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 filepath = url.toLocalFile()
                 if filepath:
                     self.file_dropped.emit(filepath)
                     break
-            event.acceptProposedAction()
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
 
 
 class OutputSignal(QThread):
