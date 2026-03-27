@@ -513,11 +513,11 @@ class MaximWindow(QMainWindow):
 
         self._set_running(True, f"Running: {cmd[:60]}...")
 
-        # Clear old output — always show fresh results
-        self.terminal.clear()
-        self.terminal.appendPlainText(f"{'─'*60}")
+        self.terminal.appendPlainText(f"\n{'─'*60}")
         self.terminal.appendPlainText(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
         self.terminal.appendPlainText(f"{'─'*60}\n")
+        scrollbar = self.terminal.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
         self.statusBar().showMessage(f"Running: {cmd[:80]}...")
 

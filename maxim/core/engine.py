@@ -23,6 +23,7 @@ ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\(B')
 TERMINAL_TOOLS = {
     "wifite", "msfconsole", "bettercap", "ettercap", "wireshark",
     "burpsuite", "zenmap", "maltego", "armitage",
+    "airodump-ng", "aireplay-ng", "airmon-ng", "wash", "reaver",
 }
 
 
@@ -116,25 +117,41 @@ class ProcessRunner:
             return False
 
     def needs_external_terminal(self, cmd):
-        words = cmd.strip().split()
-        tool = words[0]
-        if tool == "sudo" and len(words) > 1:
-            tool = words[1]
-        return tool in TERMINAL_TOOLS
+        """Check if ANY tool in the command (including chained ones) needs a terminal."""
+        # Split by && and ; to check all commands in chain
+        parts = re.split(r'&&|;', cmd)
+        for part in parts:
+            words = part.strip().split()
+            if not words:
+                continue
+            tool = words[0]
+            if tool == "sudo" and len(words) > 1:
+                tool = words[1]
+            if tool in TERMINAL_TOOLS:
+                return True
+        return False
 
     def run_in_terminal(self, cmd):
         term = _find_terminal()
         # Refresh sudo cache so the terminal session has it
         self._refresh_sudo()
 
+        # Inject sudo password into command if needed
+        if "sudo " in cmd and self._sudo_password:
+            pw = self._escape_pw()
+            # Cache sudo first, then run the actual command
+            cmd = f"echo '{pw}' | sudo -S -v 2>/dev/null; {cmd}"
+
         wrapped = f"{cmd}; echo; echo '[Done] Press Enter to close'; read"
+        # Escape double quotes in wrapped command
+        wrapped_escaped = wrapped.replace('"', '\\"')
 
         if term == "gnome-terminal":
-            launch = f'{term} -- bash -c "{wrapped}"'
+            launch = f'{term} -- bash -c "{wrapped_escaped}"'
         elif term in ("qterminal", "xfce4-terminal", "konsole"):
-            launch = f'{term} -e bash -c "{wrapped}"'
+            launch = f'{term} -e bash -c "{wrapped_escaped}"'
         else:
-            launch = f'xterm -e bash -c "{wrapped}"'
+            launch = f'xterm -e bash -c "{wrapped_escaped}"'
 
         subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
 
