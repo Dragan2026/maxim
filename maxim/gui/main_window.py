@@ -612,28 +612,50 @@ class MaximWindow(QMainWindow):
         elif ext in ('.txt', '.hash'):
             # Hash file — detect type and crack
             choices = [
-                "Auto-detect & crack with john",
-                "Crack MD5 with hashcat",
-                "Crack SHA256 with hashcat",
-                "Crack NTLM with hashcat",
-                "Crack SHA1 with hashcat",
-                "Crack bcrypt with hashcat",
-                "Identify hash type",
+                "Crack MD5 (john)",
+                "Crack MD5 (hashcat)",
+                "Crack SHA1 (john)",
+                "Crack SHA1 (hashcat)",
+                "Crack SHA256 (john)",
+                "Crack SHA256 (hashcat)",
+                "Crack NTLM (john)",
+                "Crack NTLM (hashcat)",
+                "Crack SHA512 (john)",
+                "Crack SHA512 (hashcat)",
+                "Crack bcrypt (hashcat)",
+                "Crack WPA (hashcat)",
+                "Identify hash type first",
                 "Show file contents",
             ]
-            choice, ok = QInputDialog.getItem(self, f"Analyze: {fname}", "What to do with this hash file?", choices, 0, False)
+            choice, ok = QInputDialog.getItem(self, f"Crack: {fname}", "Select hash type:", choices, 0, False)
             if not ok:
                 return
-            if "Auto-detect" in choice:
-                self._execute_command(f"john --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}'")
-            elif "MD5" in choice:
+            if "MD5 (john)" in choice:
+                self._execute_command(f"john --format=Raw-MD5 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-MD5 --show '{filepath}'")
+            elif "MD5 (hashcat)" in choice:
                 self._execute_command(f"hashcat -m 0 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "SHA256" in choice:
-                self._execute_command(f"hashcat -m 1400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "NTLM" in choice:
-                self._execute_command(f"hashcat -m 1000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "SHA1" in choice:
+            elif "SHA1 (john)" in choice:
+                self._execute_command(f"john --format=Raw-SHA1 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA1 --show '{filepath}'")
+            elif "SHA1 (hashcat)" in choice:
                 self._execute_command(f"hashcat -m 100 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "SHA256 (john)" in choice:
+                self._execute_command(f"john --format=Raw-SHA256 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA256 --show '{filepath}'")
+            elif "SHA256 (hashcat)" in choice:
+                self._execute_command(f"hashcat -m 1400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "NTLM (john)" in choice:
+                self._execute_command(f"john --format=NT --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=NT --show '{filepath}'")
+            elif "NTLM (hashcat)" in choice:
+                self._execute_command(f"hashcat -m 1000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "SHA512 (john)" in choice:
+                self._execute_command(f"john --format=Raw-SHA512 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA512 --show '{filepath}'")
+            elif "SHA512 (hashcat)" in choice:
+                self._execute_command(f"hashcat -m 1700 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "bcrypt" in choice:
+                self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "WPA" in choice:
+                self._execute_command(f"hashcat -m 22000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "Identify" in choice:
+                self._execute_command(f"echo '--- Hash contents ---' && head -5 '{filepath}' && echo '--- Hash ID ---' && hashid -f '{filepath}' 2>/dev/null || hash-identifier < '{filepath}'")
             elif "bcrypt" in choice:
                 self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
             elif "Identify" in choice:
