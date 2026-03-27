@@ -701,7 +701,13 @@ class MaximWindow(QMainWindow):
     def _offer_brute_force(self, original_cmd):
         """No password found — ask user if they want to brute force."""
         reply = QMessageBox.question(self, "No Password Found",
-            "Wordlists didn't crack it.\n\nDo you want to BRUTE FORCE it?",
+            "Wordlists didn't crack it.\n\nDo you want to BRUTE FORCE it?\n\n"
+            "Stage 1: Digits (0-9) up to 12 chars — 2 min\n"
+            "Stage 2: Lowercase (a-z) up to 8 chars — 3 min\n"
+            "Stage 3: Letters (a-zA-Z) up to 7 chars — 3 min\n"
+            "Stage 4: Alphanumeric up to 6 chars — 5 min\n"
+            "Stage 5: ALL printable up to 5 chars — 5 min\n\n"
+            "Stops early if password is found.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply != QMessageBox.Yes:
             return
@@ -715,42 +721,64 @@ class MaximWindow(QMainWindow):
             return
         filepath = m.group(1)
 
-        # Detect hash format from original command
+        # Detect john format from original command
         fmt_match = re.search(r'--format=(\S+)', original_cmd)
         john_fmt = fmt_match.group(1) if fmt_match else None
-
-        # Map john formats to hashcat modes
-        john_to_hashcat = {
-            "Raw-MD5": "0", "Raw-SHA1": "100", "Raw-SHA256": "1400",
-            "Raw-SHA512": "1700", "bcrypt": "3200", "sha512crypt": "1800",
-            "sha256crypt": "7400", "md5crypt": "500",
-        }
+        fmt_flag = f"--format={john_fmt} " if john_fmt else ""
 
         self._is_bruteforcing = True
         self.terminal.appendPlainText("\n\n  BRUTEFORCING NOW...\n\n")
 
-        if john_fmt and john_fmt in john_to_hashcat:
-            hc_mode = john_to_hashcat[john_fmt]
-            brute_cmd = (
-                f"hashcat -m {hc_mode} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' "
-                f"--increment --increment-min 1 --force 2>/dev/null ; "
-                f"hashcat -m {hc_mode} '{filepath}' --show 2>/dev/null"
-            )
-        elif "-m " in original_cmd:
-            # Already a hashcat command, extract mode
-            hc_match = re.search(r'-m\s+(\d+)', original_cmd)
-            hc_mode = hc_match.group(1) if hc_match else "0"
-            brute_cmd = (
-                f"hashcat -m {hc_mode} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' "
-                f"--increment --increment-min 1 --force 2>/dev/null ; "
-                f"hashcat -m {hc_mode} '{filepath}' --show 2>/dev/null"
-            )
-        else:
-            # Fallback: john incremental mode
-            fmt = f"--format={john_fmt} " if john_fmt else ""
-            brute_cmd = f"john {fmt}--incremental '{filepath}' ; john {fmt}--show '{filepath}'"
+        # John the Ripper staged brute force using --incremental modes
+        # John's Incremental mode is its optimized brute force engine.
+        # It uses Markov chains to try most likely passwords first.
+        #
+        # Built-in incremental modes (defined in john.conf):
+        #   Digits   — 0-9 only
+        #   Lower    — a-z only
+        #   Alpha    — a-zA-Z
+        #   Alnum    — a-zA-Z0-9
+        #   ASCII    — all printable ASCII (95 chars)
+        #
+        # --max-run-time=N  stops after N seconds (prevents running forever)
+        # --max-length=N    limits password length to try
+        #
+        # After each stage, check if cracked. If yes, stop early.
 
-        self._execute_command(brute_cmd)
+        check = f"john {fmt_flag}--show '{filepath}' 2>/dev/null | grep -c ':'"
+
+        stages = [
+            ("Stage 1: Digits only (0-9), up to 12 chars, 2 min",
+             f"john {fmt_flag}--incremental=Digits --max-length=12 --max-run-time=120 '{filepath}'"),
+            ("Stage 2: Lowercase (a-z), up to 8 chars, 3 min",
+             f"john {fmt_flag}--incremental=Lower --max-length=8 --max-run-time=180 '{filepath}'"),
+            ("Stage 3: Letters (a-zA-Z), up to 7 chars, 3 min",
+             f"john {fmt_flag}--incremental=Alpha --max-length=7 --max-run-time=180 '{filepath}'"),
+            ("Stage 4: Alphanumeric (a-zA-Z0-9), up to 6 chars, 5 min",
+             f"john {fmt_flag}--incremental=Alnum --max-length=6 --max-run-time=300 '{filepath}'"),
+            ("Stage 5: ALL printable chars, up to 5 chars, 5 min",
+             f"john {fmt_flag}--incremental=ASCII --max-length=5 --max-run-time=300 '{filepath}'"),
+        ]
+
+        # Write brute force stages to a temp script for clean execution
+        import tempfile
+        script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
+        script.write("#!/bin/bash\n")
+        for label, stage_cmd in stages:
+            script.write(f"\necho ''\necho '--- {label} ---'\n")
+            script.write(f"{stage_cmd}\n")
+            script.write(f"FOUND=$({check})\n")
+            script.write(f"if [ \"$FOUND\" -gt 0 ] 2>/dev/null; then\n")
+            script.write(f"  echo ''\n  echo 'PASSWORD CRACKED!'\n")
+            script.write(f"  john {fmt_flag}--show '{filepath}'\n")
+            script.write(f"  exit 0\nfi\n")
+        script.write(f"\necho ''\necho '--- Brute Force Complete ---'\n")
+        script.write(f"john {fmt_flag}--show '{filepath}'\n")
+        script.close()
+        import stat
+        os.chmod(script.name, os.stat(script.name).st_mode | stat.S_IEXEC)
+
+        self._execute_command(f"bash '{script.name}'")
 
     def _on_file_dropped(self, filepath):
         """Handle file dropped onto the terminal."""
