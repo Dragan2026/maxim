@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QTextBrowser, QProgressBar, QFileDialog,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QTextCursor
+from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
 
 from maxim.gui.styles import MAIN_STYLE
 from maxim.core.engine import ProcessRunner, Session, ToolInstaller
@@ -603,9 +603,54 @@ class MaximWindow(QMainWindow):
         )
         self.current_thread.start()
 
+    # Patterns that indicate a cracked password in output
+    CRACK_PATTERNS = [
+        re.compile(r'KEY FOUND!\s*\[.*\]', re.IGNORECASE),          # aircrack-ng
+        re.compile(r'^.+:.+$'),                                       # john/hashcat hash:password
+        re.compile(r'Session\.Name.*:.*Recovered', re.IGNORECASE),   # hashcat status
+        re.compile(r'Cracked', re.IGNORECASE),                        # generic
+        re.compile(r'\d+ password hash(es)? cracked', re.IGNORECASE), # john summary
+    ]
+
+    def _is_cracked_line(self, line):
+        """Check if line contains a cracked password result."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # aircrack-ng
+        if 'KEY FOUND!' in stripped:
+            return True
+        # john --show format: "hash:password" or "username:password"
+        # hashcat format: "hash:password"
+        if re.match(r'^[a-fA-F0-9]{16,}:.+$', stripped):
+            return True
+        # john cracked count
+        if re.search(r'\d+ password hash(es)? cracked', stripped, re.IGNORECASE):
+            return True
+        # hashcat recovered
+        if 'Recovered' in stripped and ('/' in stripped):
+            return True
+        # Generic
+        if 'cracked' in stripped.lower() and 'password' in stripped.lower():
+            return True
+        return False
+
     def _on_output_line(self, line):
         self.terminal.moveCursor(QTextCursor.End)
-        self.terminal.insertPlainText(line)
+        if self._is_cracked_line(line):
+            # Highlight cracked password in bright yellow/green
+            cursor = self.terminal.textCursor()
+            fmt = cursor.charFormat()
+            highlight_fmt = QTextCharFormat()
+            highlight_fmt.setForeground(QColor("#000000"))
+            highlight_fmt.setBackground(QColor("#4ade80"))
+            highlight_fmt.setFontWeight(QFont.Bold)
+            cursor.insertText(f" CRACKED >> {line.strip()} << \n", highlight_fmt)
+            # Reset format
+            cursor.setCharFormat(fmt)
+            self.terminal.setTextCursor(cursor)
+        else:
+            self.terminal.insertPlainText(line)
         # Always scroll to bottom to show latest output
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
