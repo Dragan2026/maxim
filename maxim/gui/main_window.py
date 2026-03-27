@@ -657,20 +657,22 @@ class MaximWindow(QMainWindow):
             self._found_password = password
             # Print the normal line first
             self.terminal.insertPlainText(line)
-            # Then highlight just the password
+            # Highlight the password
             cursor = self.terminal.textCursor()
-            fmt = cursor.charFormat()
             highlight_fmt = QTextCharFormat()
             highlight_fmt.setForeground(QColor("#000000"))
             highlight_fmt.setBackground(QColor("#4ade80"))
             highlight_fmt.setFontWeight(QFont.Bold)
             highlight_fmt.setFontPointSize(18)
             cursor.insertText(f"\n  PASSWORD: {password} \n\n", highlight_fmt)
-            cursor.setCharFormat(fmt)
+            # Reset to default font so subsequent output stays normal
+            default_fmt = QTextCharFormat()
+            default_fmt.setFontWeight(QFont.Normal)
+            default_fmt.setFontPointSize(self.terminal.font().pointSizeF())
+            default_fmt.setForeground(QColor("#e4e4e7"))
+            default_fmt.setBackground(QColor("transparent"))
+            cursor.setCharFormat(default_fmt)
             self.terminal.setTextCursor(cursor)
-            # Popup notification
-            QMessageBox.information(self, "PASSWORD CRACKED!",
-                f"PASSWORD FOUND:\n\n{password}")
         else:
             self.terminal.insertPlainText(line)
         scrollbar = self.terminal.verticalScrollBar()
