@@ -513,7 +513,9 @@ class MaximWindow(QMainWindow):
 
         self._set_running(True, f"Running: {cmd[:60]}...")
 
-        self.terminal.appendPlainText(f"\n{'─'*60}")
+        # Clear old output — always show fresh results
+        self.terminal.clear()
+        self.terminal.appendPlainText(f"{'─'*60}")
         self.terminal.appendPlainText(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
         self.terminal.appendPlainText(f"{'─'*60}\n")
 
@@ -529,13 +531,17 @@ class MaximWindow(QMainWindow):
     def _on_output_line(self, line):
         self.terminal.moveCursor(QTextCursor.End)
         self.terminal.insertPlainText(line)
-        self.terminal.moveCursor(QTextCursor.End)
+        # Always scroll to bottom to show latest output
+        scrollbar = self.terminal.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def _on_command_done(self, cmd, exit_code, duration):
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
         self.terminal.appendPlainText(f"\n[{status}] {duration:.1f}s\n")
         self._set_running(False)
         self.statusBar().showMessage(f"{status} -- {duration:.1f}s")
+        scrollbar = self.terminal.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
         tool_name = cmd.split()[0].split("/")[-1] if cmd else "unknown"
         self.session.log_command(cmd, tool_name, exit_code, duration)
