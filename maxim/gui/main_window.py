@@ -464,11 +464,10 @@ class MaximWindow(QMainWindow):
                 self.terminal.appendPlainText(f"\n[AI] {response}\n")
                 return
 
-            # If it contains heredoc/EOF/cat>, run the whole thing as-is via bash
-            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned or "echo '" in cleaned:
-                cmd = cleaned
+            # If it contains heredoc/EOF/cat>, run the whole thing directly
+            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
                 self.terminal.appendPlainText(f"⚡ Running command...\n")
-                self._execute_command(f"bash -c {repr(cmd)}")
+                self._execute_command(cleaned)
                 return
 
             # Split into lines, clean each

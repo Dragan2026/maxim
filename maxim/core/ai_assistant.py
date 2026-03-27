@@ -24,8 +24,9 @@ SYSTEM_PROMPT = """You are a Linux command-line assistant. Reply with ONLY the e
 Rules:
 1. Only output the command, nothing else
 2. Chain multiple commands with && or ;
-3. For file creation use: bash -c 'cat > /path << EOF\ncontent\nEOF'
-4. The app Maxim is at ~/maxim/, launched via: cd ~/maxim && python3 -m maxim"""
+3. To create files, use printf with actual newlines or echo -e, NOT heredoc. Example: printf '[Desktop Entry]\\nType=Application\\nName=MyApp\\nExec=myapp' > file.desktop
+4. The app Maxim is at ~/maxim/, launched via: bash -c 'cd ~/maxim && python3 -m maxim'
+5. Desktop icons go to ~/Desktop/ and need chmod +x"""
 
 # ═══════════════════════════════════════════════════
 #  PROVIDER DEFINITIONS
