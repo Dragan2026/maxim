@@ -9,7 +9,7 @@ setup(
     long_description=Path("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     author="stoev",
-    url="https://github.com/stoev/maxim",
+    url="https://github.com/Dragan2026/maxim",
     packages=find_packages(),
     include_package_data=True,
     package_data={"maxim": ["VERSION"]},

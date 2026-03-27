@@ -5,7 +5,7 @@ A desktop GUI for Kali Linux that manages 40+ pentest tools with an AI assistant
 ## Install on Kali Linux
 
 ```bash
-git clone https://github.com/stoev/maxim.git
+git clone https://github.com/Dragan2026/maxim.git
 cd maxim
 chmod +x install.sh
 ./install.sh

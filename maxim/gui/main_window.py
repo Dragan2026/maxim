@@ -825,70 +825,103 @@ class MaximWindow(QMainWindow):
         query = self.prompt_input.text().strip()
         if not query:
             return
+        self.prompt_input.clear()
 
-        # 1. Check NATURAL_COMMANDS (exact phrase matches)
         q_lower = query.lower().strip()
+
+        # 1. If it looks like a raw command (starts with known binary), just run it
+        raw_prefixes = ("sudo ", "nmap ", "airmon-ng", "airodump", "aireplay",
+                        "aircrack", "wifite", "msfconsole", "sqlmap ", "hydra ",
+                        "nikto ", "gobuster ", "dirb ", "ffuf ", "john ",
+                        "hashcat ", "wireshark", "tcpdump ", "ettercap",
+                        "netcat ", "nc ", "curl ", "wget ", "ping ",
+                        "traceroute", "whois ", "dig ", "host ", "ip ",
+                        "ifconfig", "iwconfig", "macchanger", "reaver ",
+                        "bettercap", "responder", "searchsploit", "msfvenom",
+                        "enum4linux", "smbclient", "crackmapexec", "gobuster",
+                        "masscan ", "netdiscover", "tor ", "proxychains",
+                        "ssh ", "socat ", "chisel ", "cat ", "grep ",
+                        "find ", "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
+                        "service ")
+        if any(q_lower.startswith(p) for p in raw_prefixes):
+            self._execute_command(query)
+            return
+
+        # 2. Check NATURAL_COMMANDS (exact phrase matches) — auto-run
         for phrase, (tool, cmd, desc) in NATURAL_COMMANDS.items():
             if phrase in q_lower:
                 cmd_filled = self._fill_placeholders(cmd)
                 if cmd_filled:
-                    self.prompt_input.clear()
                     tool_obj = get_tool_by_name(tool)
                     needs_root = tool_obj.get("needs_root", False) if tool_obj else False
                     self._execute_command(cmd_filled, as_root=needs_root)
                 return
 
-        # 2. SmartRouter
+        # 3. SmartRouter
         route = SmartRouter.route(query)
 
         if route["direct_command"]:
             self._execute_command(route["direct_command"])
-            self.prompt_input.clear()
             return
 
-        if route["intent"] == "unknown":
-            if self.ai.is_available():
-                self.tabs.setCurrentIndex(3)
-                self.ai_input.setText(query)
-                self._on_ai_submit()
-                self.prompt_input.clear()
-            else:
-                self.terminal.appendPlainText(
-                    f"\n[!] Could not determine tool for: {query}\n"
-                    f"    Try: 'scan ports on X', 'monitor mode wlan0', etc.\n"
-                    f"    Or use the Workflows tab for guided steps.\n"
-                )
-            return
-
-        if route["needs_choice"] and len(route["tools"]) > 1:
-            dlg = ToolChoiceDialog(route["tools"], route["description"], self)
-            if dlg.exec_() == QDialog.Accepted and dlg.chosen:
-                tool = get_tool_by_name(dlg.chosen)
-                self._show_tool_commands(tool, query)
-            self.prompt_input.clear()
-            return
-
+        # 4. If tools found — auto-pick the FIRST (best match) and run its first command
         if route["tools"]:
             tool = route["tools"][0]
-            self._show_tool_commands(tool, query)
-            self.prompt_input.clear()
+            best_cmd = tool["common_commands"][0]["cmd"]
+            needs_root = tool.get("needs_root", False)
+            cmd_filled = self._fill_placeholders(best_cmd)
+            if cmd_filled:
+                self._execute_command(cmd_filled, as_root=needs_root)
+            return
 
-    def _show_tool_commands(self, tool, query=""):
-        self.suggestion_frame.setVisible(True)
-        self._clear_button_layout(self.cmd_buttons_layout)
+        # 5. Unknown — send to AI
+        if self.ai.is_available():
+            self._ai_execute(query)
+        else:
+            self.terminal.appendPlainText(
+                f"\n[!] Don't know how to: {query}\n"
+                f"    Try typing the command directly, or set up AI in the AI tab.\n"
+            )
 
-        root_note = " [ROOT]" if tool["needs_root"] else ""
-        self.suggestion_label.setText(
-            f'<span style="color:#58a6ff;font-size:16px;font-weight:bold;">{tool["name"]}</span>'
-            f' <span style="color:#8b949e;">-- {tool["description"]}{root_note}</span>'
+    def _ai_execute(self, query):
+        """Send query to AI, parse response for commands, and offer to run them."""
+        self.terminal.appendPlainText(f"\n[AI] Thinking about: {query}...")
+        self.run_btn.setEnabled(False)
+
+        enhanced_query = (
+            f"The user wants to: {query}\n\n"
+            f"Give me the EXACT terminal command(s) to run on Kali Linux. "
+            f"Put each command on its own line starting with $ sign. "
+            f"Be brief — command first, short explanation after."
         )
-        for cc in tool["common_commands"]:
-            btn = QPushButton(cc["label"])
-            btn.setToolTip(cc["cmd"])
-            btn.setObjectName("ghostBtn")
-            btn.clicked.connect(partial(self._preview_and_run, cc["cmd"], tool["needs_root"]))
-            self.cmd_buttons_layout.addWidget(btn)
-        self.cmd_buttons_layout.addStretch()
+
+        thread = AIStreamSignal(self.ai, enhanced_query)
+
+        def on_done(response):
+            self.run_btn.setEnabled(True)
+            # Extract commands (lines starting with $ or ```)
+            import re as _re
+            commands = []
+            for line in response.split("\n"):
+                line = line.strip()
+                if line.startswith("$ "):
+                    commands.append(line[2:])
+                elif line.startswith("```") and not line.startswith("```\n"):
+                    continue
+                elif _re.match(r'^(sudo |nmap |airmon|airodump|hydra |sqlmap |nikto )', line):
+                    commands.append(line)
+
+            self.terminal.appendPlainText(f"\n[AI] {response}\n")
+
+            if commands:
+                # Auto-run the first command
+                cmd = commands[0].strip()
+                self.terminal.appendPlainText(f"\n[AI] Running: {cmd}\n")
+                self._execute_command(cmd)
+
+        thread.finished.connect(on_done)
+        thread.start()
+        self._ai_thread = thread  # prevent GC
 
     def _preview_and_run(self, cmd_template, needs_root):
         cmd = self._fill_placeholders(cmd_template)

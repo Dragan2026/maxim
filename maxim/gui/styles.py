@@ -9,7 +9,7 @@ QWidget {
     background-color: #09090b;
     color: #e4e4e7;
     font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', sans-serif;
-    font-size: 13px;
+    font-size: 15px;
 }
 
 QMainWindow {
@@ -22,7 +22,7 @@ QMenuBar {
     color: #a1a1aa;
     border-bottom: 1px solid #18181b;
     padding: 4px 8px;
-    font-size: 13px;
+    font-size: 15px;
 }
 QMenuBar::item {
     padding: 4px 12px;
@@ -63,7 +63,7 @@ QTabBar::tab {
     padding: 10px 22px;
     border: none;
     border-bottom: 2px solid transparent;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
 }
 QTabBar::tab:selected {
@@ -81,9 +81,9 @@ QPushButton {
     color: #ffffff;
     border: none;
     border-radius: 8px;
-    padding: 8px 20px;
+    padding: 10px 20px;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 15px;
 }
 QPushButton:hover {
     background-color: #60a5fa;
@@ -126,7 +126,7 @@ QLineEdit, QTextEdit, QPlainTextEdit {
     border: 1px solid #27272a;
     border-radius: 8px;
     padding: 10px 14px;
-    font-size: 13px;
+    font-size: 15px;
     selection-background-color: #3b82f6;
 }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
@@ -140,7 +140,7 @@ QLineEdit#promptInput {
     border: 2px solid #27272a;
     border-radius: 12px;
     padding: 14px 18px;
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 400;
     color: #fafafa;
 }
@@ -157,7 +157,7 @@ QPlainTextEdit#terminal {
     border-radius: 8px;
     padding: 12px;
     font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-    font-size: 12px;
+    font-size: 14px;
 }
 
 /* ── Scroll Bars ── */

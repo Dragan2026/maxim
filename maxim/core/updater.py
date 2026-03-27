@@ -9,7 +9,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-GITHUB_REPO = "stoev/maxim"
+GITHUB_REPO = "Dragan2026/maxim"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 INSTALL_DIR = Path(__file__).parent.parent.parent  # maxim/ root
