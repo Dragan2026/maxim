@@ -15,14 +15,14 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QLineEdit, QPushButton, QLabel,
     QFrame, QComboBox, QMessageBox, QAction,
     QMenu, QMenuBar, QApplication, QInputDialog, QSplitter,
-    QTextBrowser,
+    QTextBrowser, QProgressBar,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
 
 from maxim.gui.styles import MAIN_STYLE
 from maxim.core.engine import ProcessRunner, Session, ToolInstaller
-from maxim.core.ai_assistant import OllamaAI, OnlineAI, AIManager, SmartRouter, PROVIDERS, get_api_key, set_api_key
+from maxim.core.ai_assistant import AIManager, SmartRouter, PROVIDERS, get_api_key, set_api_key
 from maxim.core.updater import check_for_update, perform_update, get_current_version
 from maxim.core.workflows import NATURAL_COMMANDS
 from maxim.tools.tool_registry import (
@@ -31,7 +31,6 @@ from maxim.tools.tool_registry import (
 
 
 class OutputSignal(QThread):
-    """Thread-safe signal for streaming output to terminal."""
     line_received = pyqtSignal(str)
     finished = pyqtSignal(int, float)
 
@@ -75,20 +74,26 @@ class MaximWindow(QMainWindow):
 
         self.runner = ProcessRunner()
         self.session = Session()
-        self.ai = None  # Lazy-loaded
+        self.ai = None
         self.current_thread = None
+        self._running = False
 
         self._build_ui()
         self._build_menu()
 
-        # Show window immediately, then handle startup tasks
-        QTimer.singleShot(100, self._startup)
+        # Non-blocking startup
+        QTimer.singleShot(50, self._startup)
 
     def _startup(self):
-        """Run after window is visible — ask password, init AI."""
         self._ask_sudo_password()
+        # Init AI in background thread to not block UI
+        self._init_ai_thread = threading.Thread(target=self._init_ai, daemon=True)
+        self._init_ai_thread.start()
+
+    def _init_ai(self):
         self.ai = AIManager()
-        self._update_status()
+        # Schedule UI update on main thread
+        QTimer.singleShot(0, self._update_status)
 
     def _ask_sudo_password(self):
         pwd, ok = QInputDialog.getText(
@@ -101,6 +106,10 @@ class MaximWindow(QMainWindow):
             self.terminal.appendPlainText("[OK] Sudo password set.\n")
         elif not ok:
             self.terminal.appendPlainText("[!] No sudo password — privileged commands may fail.\n")
+
+    # ═══════════════════════════════════════
+    #  UI
+    # ═══════════════════════════════════════
 
     def _build_ui(self):
         central = QWidget()
@@ -125,23 +134,22 @@ class MaximWindow(QMainWindow):
         hlay.addWidget(subtitle)
         hlay.addStretch()
 
-        self.ai_status = QLabel()
+        self.ai_status = QLabel("AI: Loading...")
+        self.ai_status.setStyleSheet("color: #52525b; font-size: 13px; padding: 4px 14px; background: #18181b; border-radius: 12px;")
         hlay.addWidget(self.ai_status)
 
         self.cmd_count_label = QLabel("0 commands")
-        self.cmd_count_label.setStyleSheet("color: #52525b; font-size: 13px; margin-right: 8px;")
+        self.cmd_count_label.setStyleSheet("color: #52525b; font-size: 13px; margin-left: 8px;")
         hlay.addWidget(self.cmd_count_label)
 
         root.addWidget(header)
 
-        # ── Prompt Section ──
+        # ── Prompt ──
         prompt_frame = QFrame()
-        prompt_frame.setStyleSheet("""
-            QFrame { background: #0c0c0f; border-bottom: 1px solid #18181b; padding: 12px 20px; }
-        """)
+        prompt_frame.setStyleSheet("QFrame { background: #0c0c0f; border-bottom: 1px solid #18181b; }")
         play = QVBoxLayout(prompt_frame)
-        play.setContentsMargins(20, 12, 20, 12)
-        play.setSpacing(8)
+        play.setContentsMargins(20, 10, 20, 10)
+        play.setSpacing(6)
 
         hint = QLabel('Type a command or describe what you want — Maxim auto-picks the right tool.')
         hint.setStyleSheet("color: #71717a; font-size: 14px;")
@@ -151,22 +159,14 @@ class MaximWindow(QMainWindow):
         input_row.setSpacing(8)
 
         self.prompt_input = QLineEdit()
-        self.prompt_input.setObjectName("promptInput")
         self.prompt_input.setPlaceholderText('e.g. "scan 192.168.1.0/24" or "sudo nmap -sV target" or "crack this hash"')
         self.prompt_input.returnPressed.connect(self._on_prompt_submit)
         self.prompt_input.setStyleSheet("""
             QLineEdit {
-                background-color: #09090b;
-                border: 2px solid #27272a;
-                border-radius: 12px;
-                padding: 14px 20px;
-                font-size: 18px;
-                color: #fafafa;
+                background-color: #09090b; border: 2px solid #27272a; border-radius: 12px;
+                padding: 14px 20px; font-size: 18px; color: #fafafa;
             }
-            QLineEdit:focus {
-                border-color: #3b82f6;
-                background-color: #0c0c0f;
-            }
+            QLineEdit:focus { border-color: #3b82f6; background-color: #0c0c0f; }
         """)
         input_row.addWidget(self.prompt_input)
 
@@ -193,37 +193,43 @@ class MaximWindow(QMainWindow):
 
         play.addLayout(input_row)
 
+        # Progress bar (hidden by default)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Indeterminate
+        self.progress.setFixedHeight(3)
+        self.progress.setTextVisible(False)
+        self.progress.setStyleSheet("""
+            QProgressBar { background: #18181b; border: none; }
+            QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #3b82f6, stop:1 #8b5cf6); }
+        """)
+        self.progress.hide()
+        play.addWidget(self.progress)
+
+        # Running indicator
+        self.running_label = QLabel()
+        self.running_label.setStyleSheet("color: #3b82f6; font-size: 13px; font-weight: 500;")
+        self.running_label.hide()
+        play.addWidget(self.running_label)
+
         # Quick actions
         qbar = QHBoxLayout()
         qbar.setSpacing(6)
-        for label, cmd in [
-            ("My IP", "ip -c addr show"),
-            ("Interfaces", "iwconfig 2>/dev/null; ifconfig"),
-            ("Ports", "ss -tlnp"),
-            ("Processes", "ps aux --sort=-%mem | head -20"),
-            ("LAN Scan", "sudo nmap -sn 192.168.1.0/24"),
-            ("Routing", "ip route show"),
-            ("Clear", "__clear__"),
-        ]:
-            btn = QPushButton(label)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: transparent; border: 1px solid #27272a; color: #a1a1aa;
-                    border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 500;
-                }
-                QPushButton:hover { border-color: #3b82f6; color: #3b82f6; }
-            """)
-            if cmd == "__clear__":
-                btn.clicked.connect(self._clear_terminal)
-            else:
-                btn.clicked.connect(partial(self._execute_command, cmd))
-            qbar.addWidget(btn)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: 1px solid #27272a; color: #a1a1aa;
+                border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 500;
+            }
+            QPushButton:hover { border-color: #3b82f6; color: #3b82f6; }
+        """)
+        clear_btn.clicked.connect(self._clear_terminal)
+        qbar.addWidget(clear_btn)
         qbar.addStretch()
         play.addLayout(qbar)
 
         root.addWidget(prompt_frame)
 
-        # ── Main Area: Terminal + AI Chat side by side ──
+        # ── Main: Terminal + AI ──
         splitter = QSplitter(Qt.Horizontal)
         splitter.setStyleSheet("QSplitter::handle { background: #18181b; width: 2px; }")
 
@@ -244,11 +250,8 @@ class MaximWindow(QMainWindow):
         self.terminal.setPlaceholderText("Output will appear here...")
         self.terminal.setStyleSheet("""
             QPlainTextEdit {
-                background-color: #000000;
-                color: #4ade80;
-                border: 1px solid #18181b;
-                border-radius: 10px;
-                padding: 14px;
+                background-color: #000000; color: #4ade80;
+                border: 1px solid #18181b; border-radius: 10px; padding: 14px;
                 font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
                 font-size: 15px;
             }
@@ -270,29 +273,20 @@ class MaximWindow(QMainWindow):
         self.ai_chat.setOpenExternalLinks(False)
         self.ai_chat.setStyleSheet("""
             QTextBrowser {
-                background-color: #000000;
-                border: 1px solid #18181b;
-                border-radius: 10px;
-                padding: 14px;
-                font-size: 15px;
-                color: #e4e4e7;
+                background-color: #000000; border: 1px solid #18181b;
+                border-radius: 10px; padding: 14px; font-size: 15px; color: #e4e4e7;
             }
         """)
         alay.addWidget(self.ai_chat)
 
-        # AI input
         ai_row = QHBoxLayout()
         ai_row.setSpacing(6)
         self.ai_input = QLineEdit()
         self.ai_input.setPlaceholderText("Ask AI about pentesting...")
         self.ai_input.setStyleSheet("""
             QLineEdit {
-                background-color: #09090b;
-                border: 1px solid #27272a;
-                border-radius: 10px;
-                padding: 10px 14px;
-                font-size: 15px;
-                color: #fafafa;
+                background-color: #09090b; border: 1px solid #27272a; border-radius: 10px;
+                padding: 10px 14px; font-size: 15px; color: #fafafa;
             }
             QLineEdit:focus { border-color: #3b82f6; }
         """)
@@ -346,10 +340,7 @@ class MaximWindow(QMainWindow):
         online_menu = ai_menu.addMenu("Online Providers")
         for pid, prov in PROVIDERS.items():
             if prov["type"] == "online":
-                online_menu.addAction(
-                    f"{prov['name']}",
-                    partial(self._quick_switch_provider, pid)
-                )
+                online_menu.addAction(f"{prov['name']}", partial(self._quick_switch_provider, pid))
 
         ai_menu.addSeparator()
         ai_menu.addAction("Set API Key...", self._set_api_key_dialog)
@@ -360,18 +351,52 @@ class MaximWindow(QMainWindow):
         help_menu.addAction("About", self._show_about)
 
     # ═══════════════════════════════════════
+    #  RUNNING STATE
+    # ═══════════════════════════════════════
+
+    def _set_running(self, running, label=""):
+        """Set running state — locks input, shows progress, only Stop works."""
+        self._running = running
+        self.prompt_input.setEnabled(not running)
+        self.run_btn.setEnabled(not running)
+        self.stop_btn.setEnabled(running)
+
+        if running:
+            self.progress.show()
+            self.running_label.setText(label or "Working...")
+            self.running_label.show()
+            self.prompt_input.setStyleSheet("""
+                QLineEdit {
+                    background-color: #0c0c0f; border: 2px solid #18181b; border-radius: 12px;
+                    padding: 14px 20px; font-size: 18px; color: #52525b;
+                }
+            """)
+        else:
+            self.progress.hide()
+            self.running_label.hide()
+            self.prompt_input.setStyleSheet("""
+                QLineEdit {
+                    background-color: #09090b; border: 2px solid #27272a; border-radius: 12px;
+                    padding: 14px 20px; font-size: 18px; color: #fafafa;
+                }
+                QLineEdit:focus { border-color: #3b82f6; background-color: #0c0c0f; }
+            """)
+            self.prompt_input.setFocus()
+
+    # ═══════════════════════════════════════
     #  PROMPT HANDLING
     # ═══════════════════════════════════════
 
     def _on_prompt_submit(self):
+        if self._running:
+            return
         query = self.prompt_input.text().strip()
         if not query:
             return
         self.prompt_input.clear()
-
         q_lower = query.lower().strip()
 
-        # 1. Raw command detection
+        # 1. Raw command
         raw_prefixes = (
             "sudo ", "nmap ", "airmon-ng", "airodump", "aireplay",
             "aircrack", "wifite", "msfconsole", "sqlmap ", "hydra ",
@@ -391,7 +416,7 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
-        # 2. NATURAL_COMMANDS exact match
+        # 2. NATURAL_COMMANDS
         for phrase, (tool, cmd, desc) in NATURAL_COMMANDS.items():
             if phrase in q_lower:
                 cmd_filled = self._fill_placeholders(cmd, query)
@@ -403,11 +428,9 @@ class MaximWindow(QMainWindow):
 
         # 3. SmartRouter
         route = SmartRouter.route(query)
-
         if route["direct_command"]:
             self._execute_command(route["direct_command"])
             return
-
         if route["tools"]:
             tool = route["tools"][0]
             if tool.get("common_commands"):
@@ -420,7 +443,7 @@ class MaximWindow(QMainWindow):
                 self._execute_command(f"{tool['name']} --help")
             return
 
-        # 4. Unknown — send to AI
+        # 4. AI
         if self.ai and self.ai.is_available():
             self._ai_execute(query)
         else:
@@ -430,21 +453,21 @@ class MaximWindow(QMainWindow):
             )
 
     def _ai_execute(self, query):
-        """Send query to AI, extract command, auto-run it."""
-        self.terminal.appendPlainText(f"\n[AI] Thinking: {query}...")
-        self.run_btn.setEnabled(False)
+        self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
+        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...")
 
         enhanced_query = (
             f"The user wants to: {query}\n\n"
             f"Give me the EXACT terminal command(s) to run on Kali Linux. "
             f"Put each command on its own line starting with $ sign. "
-            f"Be brief — command first, short explanation after."
+            f"Be brief — command first, short explanation after. "
+            f"Pick the best tool, don't list alternatives."
         )
 
         thread = AIStreamSignal(self.ai, enhanced_query)
 
         def on_done(response):
-            self.run_btn.setEnabled(True)
+            self._set_running(False)
             commands = []
             for line in response.split("\n"):
                 line = line.strip()
@@ -468,7 +491,6 @@ class MaximWindow(QMainWindow):
     #  COMMAND EXECUTION
     # ═══════════════════════════════════════
 
-    # Tools that need sudo to work properly
     SUDO_TOOLS = {
         "nmap", "masscan", "netdiscover", "airmon-ng", "airodump-ng",
         "aireplay-ng", "aircrack-ng", "wifite", "reaver", "bettercap",
@@ -476,18 +498,18 @@ class MaximWindow(QMainWindow):
     }
 
     def _execute_command(self, cmd, as_root=False):
-        # Auto-add sudo for tools that need root
+        # Auto-add sudo
         if not cmd.strip().startswith("sudo ") and not cmd.strip().startswith("echo "):
             first_word = cmd.strip().split()[0] if cmd.strip() else ""
             if first_word in self.SUDO_TOOLS or as_root:
                 cmd = f"sudo {cmd}"
 
+        self._set_running(True, f"Running: {cmd[:60]}...")
+
         self.terminal.appendPlainText(f"\n{'─'*60}")
         self.terminal.appendPlainText(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
         self.terminal.appendPlainText(f"{'─'*60}\n")
 
-        self.run_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
         self.statusBar().showMessage(f"Running: {cmd[:80]}...")
 
         self.current_thread = OutputSignal(self.runner, cmd, as_root)
@@ -505,9 +527,8 @@ class MaximWindow(QMainWindow):
     def _on_command_done(self, cmd, exit_code, duration):
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
         self.terminal.appendPlainText(f"\n[{status}] {duration:.1f}s\n")
-        self.run_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.statusBar().showMessage(f"{status} — {duration:.1f}s")
+        self._set_running(False)
+        self.statusBar().showMessage(f"{status} -- {duration:.1f}s")
 
         tool_name = cmd.split()[0].split("/")[-1] if cmd else "unknown"
         self.session.log_command(cmd, tool_name, exit_code, duration)
@@ -516,8 +537,7 @@ class MaximWindow(QMainWindow):
     def _on_stop(self):
         self.runner.kill_all()
         self.terminal.appendPlainText("\n[KILLED] Process terminated.\n")
-        self.run_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        self._set_running(False)
 
     def _clear_terminal(self):
         self.terminal.clear()
@@ -527,23 +547,17 @@ class MaximWindow(QMainWindow):
     # ═══════════════════════════════════════
 
     def _extract_target_from_query(self, query):
-        """Pull IPs, domains, URLs from the user's natural language query."""
-        # Match IP addresses
         ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', query)
         if ip_match:
             return ip_match.group(1)
-        # Match domains (word.word or word.word.word)
         domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b', query)
         if domain_match:
             candidate = domain_match.group(1)
-            # Exclude common non-target words
-            skip = {"192.168", "example.com", "wlan0.mon"}
-            if candidate not in skip:
+            if candidate not in {'example.com', 'wlan0.mon'}:
                 return candidate
         return None
 
     def _fill_placeholders(self, cmd_template, query=""):
-        """Replace {target}, {domain}, etc. with values extracted from user query."""
         extracted = self._extract_target_from_query(query) if query else None
         defaults = {
             "iface": "wlan0", "target": extracted or "192.168.1.1",
@@ -578,6 +592,7 @@ class MaximWindow(QMainWindow):
         if not msg:
             return
         self.ai_input.clear()
+        self.ai_input.setEnabled(False)
 
         safe_msg = html.escape(msg)
         self.ai_chat.append(
@@ -591,7 +606,7 @@ class MaximWindow(QMainWindow):
             if route["tools"]:
                 parts = []
                 for t in route["tools"]:
-                    parts.append(f"<b>{t['name']}</b> — {t['description']}<br>")
+                    parts.append(f"<b>{t['name']}</b> -- {t['description']}<br>")
                     for cc in t["common_commands"][:3]:
                         parts.append(f"&nbsp;&nbsp;<code>{cc['cmd']}</code><br>")
                 reply = "".join(parts)
@@ -606,25 +621,78 @@ class MaximWindow(QMainWindow):
                 f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
                 f'<b style="color:#facc15;">Maxim:</b> {reply}</div>'
             )
+            self.ai_input.setEnabled(True)
+            self.ai_input.setFocus()
             return
 
         provider_tag = self.ai.provider_name
+
+        # Animated loading indicator
+        self._ai_loading_dots = 0
+        self._ai_loading_id = "ai-loading-" + str(id(msg))
         self.ai_chat.append(
-            f'<div style="background:#18181b;border-radius:10px;padding:8px;margin:6px 6px 2px 40px;">'
-            f'<span style="color:#52525b;">Thinking via {provider_tag}...</span></div>'
+            f'<div id="{self._ai_loading_id}" style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 2px 40px;">'
+            f'<span style="color:#3b82f6;">⚡ Thinking</span> '
+            f'<span style="color:#52525b;font-size:11px;">via {provider_tag}</span></div>'
         )
+
+        # Pulsing dots animation
+        self._ai_loading_timer = QTimer()
+        self._ai_loading_base_text = f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 2px 40px;">'
+        def update_dots():
+            self._ai_loading_dots = (self._ai_loading_dots + 1) % 4
+            dots = "." * self._ai_loading_dots + " " * (3 - self._ai_loading_dots)
+            # Remove last block and replace with updated dots
+            cursor = self.ai_chat.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.ai_chat.setTextCursor(cursor)
+        self._ai_loading_timer.timeout.connect(update_dots)
+        self._ai_loading_timer.start(400)
+
+        # Stream tokens into chat
+        self._ai_stream_buffer = []
+        self._ai_streaming_started = False
 
         self._ai_thread = AIStreamSignal(self.ai, msg)
 
-        def on_done(full):
-            text = html.escape(full).replace("\n", "<br>")
-            self.ai_chat.append(
-                f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
-                f'<b style="color:#4ade80;">Maxim AI</b> '
-                f'<span style="color:#52525b;font-size:11px;">via {provider_tag}</span><br>'
-                f'<span style="color:#e4e4e7;font-size:14px;">{text}</span></div>'
-            )
+        def on_token(token):
+            if not self._ai_streaming_started:
+                self._ai_streaming_started = True
+                self._ai_loading_timer.stop()
+                # Replace loading message with start of response
+                self.ai_chat.append(
+                    f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
+                    f'<b style="color:#4ade80;">Maxim AI</b> '
+                    f'<span style="color:#52525b;font-size:11px;">via {provider_tag}</span><br>'
+                    f'<span style="color:#e4e4e7;font-size:14px;">'
+                )
+            self._ai_stream_buffer.append(token)
 
+        def on_done(full):
+            self._ai_loading_timer.stop()
+            self.ai_input.setEnabled(True)
+            self.ai_input.setFocus()
+
+            if not self._ai_streaming_started:
+                # Never got streaming tokens, show full response
+                text = html.escape(full).replace("\n", "<br>")
+                self.ai_chat.append(
+                    f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
+                    f'<b style="color:#4ade80;">Maxim AI</b> '
+                    f'<span style="color:#52525b;font-size:11px;">via {provider_tag}</span><br>'
+                    f'<span style="color:#e4e4e7;font-size:14px;">{text}</span></div>'
+                )
+            else:
+                # Finalize streamed response
+                text = html.escape(full).replace("\n", "<br>")
+                self.ai_chat.append(
+                    f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
+                    f'<b style="color:#4ade80;">Maxim AI</b> '
+                    f'<span style="color:#52525b;font-size:11px;">via {provider_tag}</span><br>'
+                    f'<span style="color:#e4e4e7;font-size:14px;">{text}</span></div>'
+                )
+
+        self._ai_thread.token_received.connect(on_token)
         self._ai_thread.finished.connect(on_done)
         self._ai_thread.start()
 
@@ -642,7 +710,7 @@ class MaximWindow(QMainWindow):
         prov = PROVIDERS[pid]
 
         key, ok = QInputDialog.getText(
-            self, f"API Key — {prov['name']}",
+            self, f"API Key -- {prov['name']}",
             f"Enter API key for {prov['name']}:\nGet one at: {prov.get('key_url', 'N/A')}",
             QLineEdit.Normal, ""
         )
