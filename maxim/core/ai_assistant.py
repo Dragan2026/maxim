@@ -12,6 +12,7 @@ from pathlib import Path
 from maxim.tools.tool_registry import (
     find_tools_by_keywords, get_tool_by_name, TOOLS, TOOL_CATEGORIES
 )
+from maxim.core.commands_kb import COMMAND_KB
 
 OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_MODEL = "mistral"
@@ -19,24 +20,19 @@ DEFAULT_MODEL = "mistral"
 # Config file for API keys
 CONFIG_FILE = Path.home() / ".maxim" / "ai_config.json"
 
-SYSTEM_PROMPT = """You are a Linux command-line assistant on Kali Linux. Reply with ONLY the exact shell command to run. No explanations, no markdown, no backticks. Just the raw command.
+SYSTEM_PROMPT = """You are a Kali Linux command assistant. Reply with ONLY the exact shell command. No explanations, no markdown, no backticks.
 
 Rules:
-1. Only output the command, nothing else
+1. Output ONLY the command, nothing else
 2. Chain multiple commands with && or ;
-3. To create files, use printf with \\n for newlines, NOT heredoc. Example: printf '[Desktop Entry]\\nType=Application\\nName=MyApp\\nExec=myapp' > file.desktop
-4. The app Maxim is at ~/maxim/, launched via: bash -c 'cd ~/maxim && python3 -m maxim'
-5. Desktop icons go to ~/Desktop/ and need chmod +x
+3. Use printf for file creation, NOT heredoc
+4. Replace {target}, {url}, {domain} etc with values from user's request
+5. Maxim app is at ~/maxim/, launched via: bash -c 'cd ~/maxim && python3 -m maxim'
+6. NEVER use nmap for WiFi — use airmon-ng/airodump-ng
+7. WiFi interface: wlan0, monitor mode: wlan0mon
 
-WiFi/Wireless rules:
-- To scan/search WiFi networks: sudo airmon-ng start wlan0 && sudo airodump-ng wlan0mon
-- To stop monitor mode: sudo airmon-ng stop wlan0mon
-- WiFi interface is wlan0, monitor mode is wlan0mon
-- To deauth: sudo aireplay-ng --deauth 10 -a BSSID wlan0mon
-- To capture handshake: sudo airodump-ng -c CHANNEL --bssid BSSID -w capture wlan0mon
-- To crack WPA: sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt capture.cap
-- NEVER use nmap for WiFi scanning — use airmon-ng and airodump-ng
-- NEVER scan 192.168.1.0/24 when user asks about WiFi networks"""
+COMMAND REFERENCE (use these exact commands):
+""" + COMMAND_KB
 
 # ═══════════════════════════════════════════════════
 #  PROVIDER DEFINITIONS
