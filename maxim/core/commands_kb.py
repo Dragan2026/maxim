@@ -25,9 +25,11 @@ Ping sweep: nmap -sn -PE {subnet}
 List wireless interfaces: iwconfig
 Check interface mode: iwconfig wlan0
 Enable monitor mode: sudo airmon-ng check kill && sudo airmon-ng start wlan0
-Disable monitor mode: sudo airmon-ng stop wlan0mon
+Disable monitor mode: sudo airmon-ng stop wlan0mon && sudo systemctl restart NetworkManager
 Kill interfering processes: sudo airmon-ng check kill
 Scan WiFi networks: sudo airmon-ng check kill && sudo airmon-ng start wlan0 && sudo airodump-ng wlan0mon
+Restore network after monitor mode: sudo airmon-ng stop wlan0mon && sudo systemctl restart NetworkManager && sudo systemctl restart wpa_supplicant
+Fix network down: sudo systemctl restart NetworkManager && sudo systemctl restart wpa_supplicant && sudo dhclient
 Scan specific channel: sudo airodump-ng -c {channel} wlan0mon
 Target specific AP: sudo airodump-ng -c {channel} --bssid {bssid} -w capture wlan0mon
 Deauth attack: sudo aireplay-ng --deauth 0 -a {bssid} wlan0mon

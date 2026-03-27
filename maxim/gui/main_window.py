@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QLineEdit, QPushButton, QLabel,
     QFrame, QComboBox, QMessageBox, QAction,
     QMenu, QMenuBar, QApplication, QInputDialog, QSplitter,
-    QTextBrowser, QProgressBar,
+    QTextBrowser, QProgressBar, QFileDialog,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
@@ -214,16 +214,38 @@ class MaximWindow(QMainWindow):
         # Quick actions
         qbar = QHBoxLayout()
         qbar.setSpacing(6)
-        clear_btn = QPushButton("Clear")
-        clear_btn.setStyleSheet("""
+
+        btn_style = """
             QPushButton {
                 background: transparent; border: 1px solid #27272a; color: #a1a1aa;
                 border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 500;
             }
             QPushButton:hover { border-color: #3b82f6; color: #3b82f6; }
+        """
+
+        load_file_btn = QPushButton("Load File")
+        load_file_btn.setStyleSheet(btn_style)
+        load_file_btn.clicked.connect(self._load_file)
+        qbar.addWidget(load_file_btn)
+
+        restore_net_btn = QPushButton("Restore Network")
+        restore_net_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: 1px solid #27272a; color: #ef4444;
+                border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 500;
+            }
+            QPushButton:hover { border-color: #ef4444; color: #f87171; }
         """)
+        restore_net_btn.clicked.connect(lambda: self._execute_command(
+            "sudo airmon-ng stop wlan0mon 2>/dev/null; sudo systemctl restart NetworkManager; sudo systemctl restart wpa_supplicant; sudo dhclient"
+        ))
+        qbar.addWidget(restore_net_btn)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setStyleSheet(btn_style)
         clear_btn.clicked.connect(self._clear_terminal)
         qbar.addWidget(clear_btn)
+
         qbar.addStretch()
         play.addLayout(qbar)
 
@@ -547,6 +569,86 @@ class MaximWindow(QMainWindow):
         tool_name = cmd.split()[0].split("/")[-1] if cmd else "unknown"
         self.session.log_command(cmd, tool_name, exit_code, duration)
         self.cmd_count_label.setText(f"{len(self.session.commands)} commands")
+
+    def _load_file(self):
+        """Load a file (cap, pcap, hash, txt) and auto-analyze/crack it."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Load File for Analysis",
+            os.path.expanduser("~"),
+            "All Supported (*.cap *.pcap *.hc22000 *.hccapx *.txt *.hash *.csv *.xml);;Capture Files (*.cap *.pcap);;Hash Files (*.txt *.hash *.hc22000 *.hccapx);;All Files (*)"
+        )
+        if not filepath:
+            return
+
+        ext = os.path.splitext(filepath)[1].lower()
+        fname = os.path.basename(filepath)
+
+        if ext in ('.cap', '.pcap'):
+            # WiFi capture — offer options
+            choices = [
+                "Crack WPA with aircrack-ng (rockyou.txt)",
+                "Convert to hashcat format (hc22000)",
+                "Analyze with tshark",
+                "View handshakes with aircrack-ng",
+            ]
+            choice, ok = QInputDialog.getItem(self, f"Analyze: {fname}", "What to do with this capture file?", choices, 0, False)
+            if not ok:
+                return
+            if "Crack WPA" in choice:
+                self._execute_command(f"sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt '{filepath}'")
+            elif "Convert to hashcat" in choice:
+                out = filepath.rsplit('.', 1)[0] + '.hc22000'
+                self._execute_command(f"hcxpcapngtool -o '{out}' '{filepath}'")
+            elif "Analyze with tshark" in choice:
+                self._execute_command(f"tshark -r '{filepath}' -Y 'eapol' 2>/dev/null | head -50")
+            elif "View handshakes" in choice:
+                self._execute_command(f"sudo aircrack-ng '{filepath}'")
+
+        elif ext in ('.hc22000', '.hccapx'):
+            # Hashcat WiFi format
+            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat...\n")
+            self._execute_command(f"hashcat -m 22000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+
+        elif ext in ('.txt', '.hash'):
+            # Hash file — detect type and crack
+            choices = [
+                "Auto-detect & crack with john",
+                "Crack MD5 with hashcat",
+                "Crack SHA256 with hashcat",
+                "Crack NTLM with hashcat",
+                "Crack SHA1 with hashcat",
+                "Crack bcrypt with hashcat",
+                "Identify hash type",
+                "Show file contents",
+            ]
+            choice, ok = QInputDialog.getItem(self, f"Analyze: {fname}", "What to do with this hash file?", choices, 0, False)
+            if not ok:
+                return
+            if "Auto-detect" in choice:
+                self._execute_command(f"john --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}'")
+            elif "MD5" in choice:
+                self._execute_command(f"hashcat -m 0 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "SHA256" in choice:
+                self._execute_command(f"hashcat -m 1400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "NTLM" in choice:
+                self._execute_command(f"hashcat -m 1000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "SHA1" in choice:
+                self._execute_command(f"hashcat -m 100 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "bcrypt" in choice:
+                self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif "Identify" in choice:
+                self._execute_command(f"head -5 '{filepath}' && echo '---' && hashid -f '{filepath}'")
+            elif "Show file" in choice:
+                self._execute_command(f"cat '{filepath}'")
+
+        elif ext in ('.csv', '.xml'):
+            # Scan results
+            self.terminal.appendPlainText(f"\n⚡ Showing {fname}...\n")
+            self._execute_command(f"cat '{filepath}' | head -100")
+
+        else:
+            # Unknown — let AI decide
+            self._ai_execute(f"analyze this file: {filepath}")
 
     def _on_stop(self):
         self.runner.kill_all()
