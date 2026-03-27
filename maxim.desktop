@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=MAXIM
-Comment=Penetration Testing Command Center
-Exec=bash -c 'cd ~/maxim && python3 -m maxim'
-Icon=/usr/share/icons/hicolor/scalable/apps/kali-menu.svg
-Terminal=false
-Categories=System;Security;
-StartupNotify=true
