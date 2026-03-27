@@ -391,7 +391,7 @@ class MaximWindow(QMainWindow):
         # 2. NATURAL_COMMANDS exact match
         for phrase, (tool, cmd, desc) in NATURAL_COMMANDS.items():
             if phrase in q_lower:
-                cmd_filled = self._fill_placeholders(cmd)
+                cmd_filled = self._fill_placeholders(cmd, query)
                 if cmd_filled:
                     tool_obj = get_tool_by_name(tool)
                     needs_root = tool_obj.get("needs_root", False) if tool_obj else False
@@ -409,7 +409,7 @@ class MaximWindow(QMainWindow):
             tool = route["tools"][0]
             best_cmd = tool["common_commands"][0]["cmd"]
             needs_root = tool.get("needs_root", False)
-            cmd_filled = self._fill_placeholders(best_cmd)
+            cmd_filled = self._fill_placeholders(best_cmd, query)
             if cmd_filled:
                 self._execute_command(cmd_filled, as_root=needs_root)
             return
@@ -507,10 +507,29 @@ class MaximWindow(QMainWindow):
     #  PLACEHOLDERS
     # ═══════════════════════════════════════
 
-    def _fill_placeholders(self, cmd_template):
+    def _extract_target_from_query(self, query):
+        """Pull IPs, domains, URLs from the user's natural language query."""
+        # Match IP addresses
+        ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', query)
+        if ip_match:
+            return ip_match.group(1)
+        # Match domains (word.word or word.word.word)
+        domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b', query)
+        if domain_match:
+            candidate = domain_match.group(1)
+            # Exclude common non-target words
+            skip = {"192.168", "example.com", "wlan0.mon"}
+            if candidate not in skip:
+                return candidate
+        return None
+
+    def _fill_placeholders(self, cmd_template, query=""):
+        """Replace {target}, {domain}, etc. with values extracted from user query."""
+        extracted = self._extract_target_from_query(query) if query else None
         defaults = {
-            "iface": "wlan0", "target": "192.168.1.1", "port": "4444",
-            "lhost": "0.0.0.0", "lport": "4444", "domain": "example.com",
+            "iface": "wlan0", "target": extracted or "192.168.1.1",
+            "port": "4444", "lhost": "0.0.0.0", "lport": "4444",
+            "domain": extracted or "example.com",
             "user": "admin", "wordlist": "/usr/share/wordlists/rockyou.txt",
         }
         cmd = cmd_template
