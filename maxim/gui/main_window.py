@@ -607,6 +607,11 @@ class MaximWindow(QMainWindow):
             if first_word in self.SUDO_TOOLS or as_root:
                 cmd = f"sudo {cmd}"
 
+        # Reset cracking state for each new command
+        is_crack = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
+        if is_crack and not getattr(self, '_is_bruteforcing', False):
+            self._found_password = None
+
         self._set_running(True, f"Running: {cmd[:60]}...")
 
         self.terminal.appendPlainText(f"\n{'─'*60}")
@@ -693,11 +698,6 @@ class MaximWindow(QMainWindow):
         # If cracking finished with no password found, offer brute force
         is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
         if is_crack_cmd and not getattr(self, '_found_password', None) and not getattr(self, '_is_bruteforcing', False):
-            # Check terminal output for "X password hash cracked" with X > 0
-            text = self.terminal.toPlainText()[-500:]
-            cracked_match = re.search(r'(\d+) password hash(?:es)? cracked', text)
-            if cracked_match and int(cracked_match.group(1)) > 0:
-                return  # Password was cracked, just not detected by regex
             self._offer_brute_force(cmd)
 
     def _offer_brute_force(self, original_cmd):
