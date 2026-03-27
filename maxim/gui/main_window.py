@@ -443,20 +443,9 @@ class MaximWindow(QMainWindow):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
         self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
 
-        enhanced_query = (
-            f"{query}\n\n"
-            f"IMPORTANT: Reply with ONLY the command to run, nothing else. "
-            f"No explanation, no markdown, no backticks, no code blocks. "
-            f"Just the raw command on a single line. "
-            f"Example response: nmap -sV -sC target.com"
-        )
+        enhanced_query = f"{query}"
 
         thread = AIStreamSignal(self.ai, enhanced_query)
-
-        self._ai_response_buf = []
-
-        def on_token(token):
-            self._ai_response_buf.append(token)
 
         def on_done(response):
             self._set_running(False)
@@ -464,47 +453,39 @@ class MaximWindow(QMainWindow):
                 self.terminal.appendPlainText(f"\n{response}\n")
                 return
 
-            # Extract command from response — clean up markdown/backticks
-            cmd = None
-            for line in response.strip().split("\n"):
+            # Clean response — remove markdown formatting
+            cleaned = response.strip()
+            # Remove ```bash ... ``` or ``` ... ``` wrappers
+            cleaned = re.sub(r'^```\w*\n?', '', cleaned)
+            cleaned = re.sub(r'\n?```$', '', cleaned)
+            cleaned = cleaned.strip()
+
+            # Remove leading $ or >
+            lines = []
+            for line in cleaned.split("\n"):
                 line = line.strip()
-                # Skip empty, markdown headers, explanations
-                if not line or line.startswith("#") or line.startswith("```"):
-                    continue
-                # Remove leading $ or > or backticks
-                line = re.sub(r'^[$>]\s*', '', line)
-                line = line.strip('`').strip()
                 if not line:
                     continue
-                # Check if it looks like a command
-                first_word = line.split()[0].split("/")[-1] if line.split() else ""
-                known_tools = {
-                    "nmap", "sudo", "masscan", "nikto", "gobuster", "dirb", "ffuf",
-                    "sqlmap", "hydra", "john", "hashcat", "airmon-ng", "airodump-ng",
-                    "aireplay-ng", "aircrack-ng", "wifite", "msfconsole", "msfvenom",
-                    "searchsploit", "whatweb", "wpscan", "enum4linux", "smbclient",
-                    "crackmapexec", "netdiscover", "tcpdump", "ettercap", "bettercap",
-                    "responder", "macchanger", "reaver", "wireshark", "socat", "chisel",
-                    "netcat", "nc", "curl", "wget", "ping", "traceroute", "whois",
-                    "dig", "host", "ip", "ifconfig", "iwconfig", "tor", "proxychains",
-                    "ssh", "fern-wifi-cracker", "medusa", "arp-scan", "hping3",
-                    "set", "beef-xss", "burpsuite", "zaproxy", "lynis", "openvas",
-                    "cat", "grep", "ls", "apt", "apt-get", "systemctl", "service",
-                }
-                if first_word in known_tools:
-                    cmd = line
-                    break
-                # If first line and no match, still use it (AI was told to give raw command)
-                if not cmd:
-                    cmd = line
+                line = re.sub(r'^[$>]\s*', '', line)
+                line = line.strip('`').strip()
+                if line:
+                    lines.append(line)
 
-            if cmd:
-                self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
-                self._execute_command(cmd)
-            else:
+            if not lines:
                 self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                return
 
-        thread.token_received.connect(on_token)
+            # Join all lines as one command (could be multi-line with &&)
+            # If it looks like a single coherent command, use the whole thing
+            cmd = " && ".join(lines) if len(lines) > 1 and not any("&&" in l or ";" in l for l in lines) else "\n".join(lines)
+
+            # For multi-line (heredoc/cat EOF), use the full cleaned text
+            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
+                cmd = cleaned
+
+            self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
+            self._execute_command(cmd)
+
         thread.finished.connect(on_done)
         thread.start()
         self._ai_thread = thread
