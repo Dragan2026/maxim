@@ -98,7 +98,9 @@ class MaximWindow(QMainWindow):
         )
         if ok and pwd:
             self.runner.set_sudo_password(pwd)
-            self.terminal.appendPlainText("[OK] Sudo authenticated.\n")
+            self.terminal.appendPlainText("[OK] Sudo password set.\n")
+        elif not ok:
+            self.terminal.appendPlainText("[!] No sudo password — privileged commands may fail.\n")
 
     def _build_ui(self):
         central = QWidget()
@@ -466,7 +468,20 @@ class MaximWindow(QMainWindow):
     #  COMMAND EXECUTION
     # ═══════════════════════════════════════
 
+    # Tools that need sudo to work properly
+    SUDO_TOOLS = {
+        "nmap", "masscan", "netdiscover", "airmon-ng", "airodump-ng",
+        "aireplay-ng", "aircrack-ng", "wifite", "reaver", "bettercap",
+        "ettercap", "tcpdump", "macchanger", "responder", "arp-scan",
+    }
+
     def _execute_command(self, cmd, as_root=False):
+        # Auto-add sudo for tools that need root
+        if not cmd.strip().startswith("sudo ") and not cmd.strip().startswith("echo "):
+            first_word = cmd.strip().split()[0] if cmd.strip() else ""
+            if first_word in self.SUDO_TOOLS or as_root:
+                cmd = f"sudo {cmd}"
+
         self.terminal.appendPlainText(f"\n{'─'*60}")
         self.terminal.appendPlainText(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
         self.terminal.appendPlainText(f"{'─'*60}\n")
