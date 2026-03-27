@@ -52,25 +52,14 @@ class AIStreamSignal(QThread):
     token_received = pyqtSignal(str)
     finished = pyqtSignal(str)
 
-    def __init__(self, ai_manager, message, enrich_online=False):
+    def __init__(self, ai_manager, message):
         super().__init__()
         self.ai = ai_manager
         self.message = message
-        self.enrich_online = enrich_online
 
     def run(self):
         try:
-            msg = self.message
-            # Online lookup runs in this background thread (not UI thread)
-            if self.enrich_online:
-                try:
-                    from maxim.core.online_kb import lookup_command
-                    kb = lookup_command(self.message)
-                    if kb:
-                        msg = f"{self.message}\n\nReference commands:\n{kb[:1500]}\n\nUsing the above, give the exact command."
-                except Exception:
-                    pass
-            response = self.ai.chat(msg, stream_callback=lambda t: self.token_received.emit(t))
+            response = self.ai.chat(self.message, stream_callback=lambda t: self.token_received.emit(t))
             self.finished.emit(response)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -454,50 +443,53 @@ class MaximWindow(QMainWindow):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
         self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
 
-        thread = AIStreamSignal(self.ai, query, enrich_online=True)
+        thread = AIStreamSignal(self.ai, query)
 
         def on_done(response):
-            self._set_running(False)
-            if response.startswith("[Error]") or response.startswith("[AI Error]"):
-                self.terminal.appendPlainText(f"\n{response}\n")
-                return
+            try:
+                self._set_running(False)
+                if response.startswith("[Error]") or response.startswith("[AI Error]"):
+                    self.terminal.appendPlainText(f"\n{response}\n")
+                    return
 
-            # Clean response — remove markdown formatting
-            cleaned = response.strip()
-            # Remove ```bash ... ``` or ``` ... ``` wrappers
-            cleaned = re.sub(r'^```\w*\n?', '', cleaned)
-            cleaned = re.sub(r'\n?```\s*$', '', cleaned)
-            cleaned = cleaned.strip()
+                # Clean response — remove markdown formatting
+                cleaned = response.strip()
+                cleaned = re.sub(r'^```\w*\n?', '', cleaned)
+                cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+                cleaned = cleaned.strip()
 
-            if not cleaned:
-                self.terminal.appendPlainText(f"\n[AI] {response}\n")
-                return
+                if not cleaned:
+                    self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                    return
 
-            # If it contains heredoc/EOF/cat>, run the whole thing directly
-            if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
-                self.terminal.appendPlainText(f"⚡ Running command...\n")
-                self._execute_command(cleaned)
-                return
+                # If it contains heredoc/EOF/cat>, run the whole thing directly
+                if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
+                    self.terminal.appendPlainText(f"⚡ Running command...\n")
+                    self._execute_command(cleaned)
+                    return
 
-            # Split into lines, clean each
-            commands = []
-            for line in cleaned.split("\n"):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                line = re.sub(r'^[$>]\s*', '', line)
-                line = line.strip('`').strip()
-                if line:
-                    commands.append(line)
+                # Split into lines, clean each
+                commands = []
+                for line in cleaned.split("\n"):
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    line = re.sub(r'^[$>]\s*', '', line)
+                    line = line.strip('`').strip()
+                    if line:
+                        commands.append(line)
 
-            if not commands:
-                self.terminal.appendPlainText(f"\n[AI] {response}\n")
-                return
+                if not commands:
+                    self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                    return
 
-            # Run all commands chained
-            cmd = " && ".join(commands)
-            self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
-            self._execute_command(cmd)
+                # Run all commands chained
+                cmd = " && ".join(commands)
+                self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
+                self._execute_command(cmd)
+            except Exception as e:
+                self.terminal.appendPlainText(f"\n[Error] {e}\n")
+                self._set_running(False)
 
         thread.finished.connect(on_done)
         thread.start()

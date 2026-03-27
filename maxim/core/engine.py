@@ -101,6 +101,10 @@ class ProcessRunner:
         """Escape password for safe use in shell single quotes."""
         return self._sudo_password.replace("'", "'\\''") if self._sudo_password else ""
 
+    def _refresh_sudo(self):
+        """Refresh sudo cache before opening external terminal."""
+        self._cache_sudo()
+
     def _cache_sudo(self):
         """Cache sudo credentials so all future sudo commands work without stdin pipe."""
         if not self._sudo_password:
@@ -132,28 +136,34 @@ class ProcessRunner:
         return False
 
     def run_in_terminal(self, cmd):
-        term = _find_terminal()
-        # Refresh sudo cache so the terminal session has it
-        self._refresh_sudo()
+        try:
+            term = _find_terminal()
+            self._refresh_sudo()
 
-        # Inject sudo password into command if needed
-        if "sudo " in cmd and self._sudo_password:
-            pw = self._escape_pw()
-            # Cache sudo first, then run the actual command
-            cmd = f"echo '{pw}' | sudo -S -v 2>/dev/null; {cmd}"
+            # Inject sudo password if needed
+            if "sudo " in cmd and self._sudo_password:
+                pw = self._escape_pw()
+                cmd = f"echo '{pw}' | sudo -S -v 2>/dev/null; {cmd}"
 
-        wrapped = f"{cmd}; echo; echo '[Done] Press Enter to close'; read"
-        # Escape double quotes in wrapped command
-        wrapped_escaped = wrapped.replace('"', '\\"')
+            # Write command to temp script to avoid escaping issues
+            import tempfile
+            script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_')
+            script.write("#!/bin/bash\n")
+            script.write(cmd + "\n")
+            script.write('echo\necho "[Done] Press Enter to close"\nread\n')
+            script.close()
+            os.chmod(script.name, 0o755)
 
-        if term == "gnome-terminal":
-            launch = f'{term} -- bash -c "{wrapped_escaped}"'
-        elif term in ("qterminal", "xfce4-terminal", "konsole"):
-            launch = f'{term} -e bash -c "{wrapped_escaped}"'
-        else:
-            launch = f'xterm -e bash -c "{wrapped_escaped}"'
+            if term == "gnome-terminal":
+                launch = f'{term} -- bash {script.name}'
+            elif term in ("qterminal", "xfce4-terminal", "konsole"):
+                launch = f'{term} -e bash {script.name}'
+            else:
+                launch = f'xterm -e bash {script.name}'
 
-        subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
+            subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
+        except Exception as e:
+            print(f"[Error opening terminal] {e}")
 
     def run(self, cmd, as_root=False, callback=None, env=None):
         if as_root and os.geteuid() != 0:
