@@ -152,9 +152,10 @@ class ProcessRunner:
                 callback("[Opened in external terminal]\n")
             return 0, "[Opened in external terminal]\n", 0.0
 
-        # Refresh sudo cache before any sudo command (no stdin piping needed)
+        # Inline sudo password into the shell command
         if "sudo " in cmd and self._sudo_password:
-            self._refresh_sudo()
+            pw = self._sudo_password.replace("'", "'\\''")
+            cmd = cmd.replace("sudo ", f"echo '{pw}' | sudo -S ", 1)
 
         merged_env = os.environ.copy()
         if env:
