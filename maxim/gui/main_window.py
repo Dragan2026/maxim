@@ -148,6 +148,11 @@ class MaximWindow(QMainWindow):
         QTimer.singleShot(0, self._update_status)
 
     def _ask_sudo_password(self):
+        # Auto-set sudo password
+        self.runner.set_sudo_password("5505")
+        self.terminal.appendPlainText("[OK] Sudo password set.\n")
+        return
+        # Fallback dialog (kept but unreachable)
         pwd, ok = QInputDialog.getText(
             self, "Sudo Password",
             "Enter your sudo password (needed to run privileged commands):",
