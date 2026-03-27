@@ -652,6 +652,7 @@ class MaximWindow(QMainWindow):
         self.terminal.moveCursor(QTextCursor.End)
         password = self._extract_password(line)
         if password:
+            self._found_password = password
             # Print the normal line first
             self.terminal.insertPlainText(line)
             # Then highlight just the password
@@ -665,6 +666,9 @@ class MaximWindow(QMainWindow):
             cursor.insertText(f"\n  PASSWORD: {password} \n\n", highlight_fmt)
             cursor.setCharFormat(fmt)
             self.terminal.setTextCursor(cursor)
+            # Popup notification
+            QMessageBox.information(self, "PASSWORD CRACKED!",
+                f"PASSWORD FOUND:\n\n{password}")
         else:
             self.terminal.insertPlainText(line)
         scrollbar = self.terminal.verticalScrollBar()
@@ -681,6 +685,65 @@ class MaximWindow(QMainWindow):
         tool_name = cmd.split()[0].split("/")[-1] if cmd else "unknown"
         self.session.log_command(cmd, tool_name, exit_code, duration)
         self.cmd_count_label.setText(f"{len(self.session.commands)} commands")
+
+        # If cracking finished with no password found, offer brute force
+        is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
+        if is_crack_cmd and not getattr(self, '_found_password', None) and not getattr(self, '_is_bruteforcing', False):
+            self._offer_brute_force(cmd)
+
+    def _offer_brute_force(self, original_cmd):
+        """No password found — ask user if they want to brute force."""
+        reply = QMessageBox.question(self, "No Password Found",
+            "Wordlists didn't crack it.\n\nDo you want to BRUTE FORCE it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply != QMessageBox.Yes:
+            return
+
+        # Extract the file path from the original command
+        m = re.search(r"'([^']+)'", original_cmd)
+        if not m:
+            m = re.search(r'\s(\S+\.\S+)', original_cmd)
+        if not m:
+            self.terminal.appendPlainText("[!] Could not determine file to brute force\n")
+            return
+        filepath = m.group(1)
+
+        # Detect hash format from original command
+        fmt_match = re.search(r'--format=(\S+)', original_cmd)
+        john_fmt = fmt_match.group(1) if fmt_match else None
+
+        # Map john formats to hashcat modes
+        john_to_hashcat = {
+            "Raw-MD5": "0", "Raw-SHA1": "100", "Raw-SHA256": "1400",
+            "Raw-SHA512": "1700", "bcrypt": "3200", "sha512crypt": "1800",
+            "sha256crypt": "7400", "md5crypt": "500",
+        }
+
+        self._is_bruteforcing = True
+        self.terminal.appendPlainText("\n\n  BRUTEFORCING NOW...\n\n")
+
+        if john_fmt and john_fmt in john_to_hashcat:
+            hc_mode = john_to_hashcat[john_fmt]
+            brute_cmd = (
+                f"hashcat -m {hc_mode} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' "
+                f"--increment --increment-min 1 --force 2>/dev/null ; "
+                f"hashcat -m {hc_mode} '{filepath}' --show 2>/dev/null"
+            )
+        elif "-m " in original_cmd:
+            # Already a hashcat command, extract mode
+            hc_match = re.search(r'-m\s+(\d+)', original_cmd)
+            hc_mode = hc_match.group(1) if hc_match else "0"
+            brute_cmd = (
+                f"hashcat -m {hc_mode} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' "
+                f"--increment --increment-min 1 --force 2>/dev/null ; "
+                f"hashcat -m {hc_mode} '{filepath}' --show 2>/dev/null"
+            )
+        else:
+            # Fallback: john incremental mode
+            fmt = f"--format={john_fmt} " if john_fmt else ""
+            brute_cmd = f"john {fmt}--incremental '{filepath}' ; john {fmt}--show '{filepath}'"
+
+        self._execute_command(brute_cmd)
 
     def _on_file_dropped(self, filepath):
         """Handle file dropped onto the terminal."""
@@ -756,6 +819,8 @@ class MaximWindow(QMainWindow):
 
     def _analyze_file(self, filepath):
         """Auto-detect file type and crack/analyze immediately — no popups."""
+        self._found_password = None
+        self._is_bruteforcing = False
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
 
