@@ -624,35 +624,32 @@ class MaximWindow(QMainWindow):
             return []
 
     def _select_wifi_adapter(self):
-        """Show popup to select which wireless adapter to use for monitor mode.
-        Returns (monitor_iface, keep_iface) or (None, None) if cancelled."""
+        """Auto-select external WiFi adapter for monitor mode.
+        Always picks the external adapter (not wlan0/internal).
+        Returns (monitor_iface, keep_iface)."""
         ifaces = self._detect_wifi_interfaces()
 
         if not ifaces:
             QMessageBox.warning(self, "No WiFi Adapter",
-                "No wireless interfaces found.\n\nMake sure a WiFi adapter is connected.")
+                "No wireless interfaces found.\n\nMake sure an external WiFi adapter is connected.")
             return None, None
 
         if len(ifaces) == 1:
-            # Only one adapter — use it, no choice needed
             return ifaces[0], None
 
-        # Multiple adapters — let user pick which one for monitor mode
-        items = [f"{i} — use for MONITOR mode" for i in ifaces]
-        choice, ok = QInputDialog.getItem(
-            self, "Select WiFi Adapter",
-            "Multiple wireless adapters detected.\n\n"
-            "Select which adapter to use for MONITOR MODE.\n"
-            "The other adapter(s) will keep normal WiFi connection.\n",
-            items, 0, False
-        )
-        if not ok:
-            return None, None
+        # Auto-pick external adapter (not wlan0 = internal)
+        # External adapters are typically wlan1, wlan2, etc.
+        external = [i for i in ifaces if i != "wlan0"]
+        internal = [i for i in ifaces if i == "wlan0"]
 
-        selected_idx = items.index(choice)
-        monitor_iface = ifaces[selected_idx]
-        keep_ifaces = [i for i in ifaces if i != monitor_iface]
-        return monitor_iface, keep_ifaces[0] if keep_ifaces else None
+        if external:
+            monitor_iface = external[0]
+            keep_iface = internal[0] if internal else None
+        else:
+            monitor_iface = ifaces[0]
+            keep_iface = ifaces[1] if len(ifaces) > 1 else None
+
+        return monitor_iface, keep_iface
 
     def _is_wifi_command(self, cmd):
         """Check if command involves WiFi tools that need monitor mode."""
