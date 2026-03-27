@@ -663,7 +663,7 @@ class MaximWindow(QMainWindow):
             highlight_fmt.setForeground(QColor("#000000"))
             highlight_fmt.setBackground(QColor("#4ade80"))
             highlight_fmt.setFontWeight(QFont.Bold)
-            highlight_fmt.setFontPointSize(18)
+            highlight_fmt.setFontPointSize(12)
             cursor.insertText(f"\n  PASSWORD: {password} \n\n", highlight_fmt)
             # Reset to default font so subsequent output stays normal
             default_fmt = QTextCharFormat()
