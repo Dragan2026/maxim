@@ -444,20 +444,19 @@ class MaximWindow(QMainWindow):
         self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
 
         enhanced_query = (
-            f"The user wants to: {query}\n\n"
-            f"Give me the EXACT terminal command(s) to run on Kali Linux. "
-            f"Put each command on its own line starting with $ sign. "
-            f"Be brief — command first, short explanation after. "
-            f"Pick the best tool, don't list alternatives. "
-            f"If it's a scan, use nmap by default."
+            f"{query}\n\n"
+            f"IMPORTANT: Reply with ONLY the command to run, nothing else. "
+            f"No explanation, no markdown, no backticks, no code blocks. "
+            f"Just the raw command on a single line. "
+            f"Example response: nmap -sV -sC target.com"
         )
 
         thread = AIStreamSignal(self.ai, enhanced_query)
 
+        self._ai_response_buf = []
+
         def on_token(token):
-            self.terminal.moveCursor(QTextCursor.End)
-            self.terminal.insertPlainText(token)
-            self.terminal.moveCursor(QTextCursor.End)
+            self._ai_response_buf.append(token)
 
         def on_done(response):
             self._set_running(False)
@@ -465,19 +464,45 @@ class MaximWindow(QMainWindow):
                 self.terminal.appendPlainText(f"\n{response}\n")
                 return
 
-            # Extract and auto-run commands
-            commands = []
-            for line in response.split("\n"):
+            # Extract command from response — clean up markdown/backticks
+            cmd = None
+            for line in response.strip().split("\n"):
                 line = line.strip()
-                if line.startswith("$ "):
-                    commands.append(line[2:])
-                elif re.match(r'^(sudo |nmap |airmon|airodump|hydra |sqlmap |nikto |gobuster |dirb |ffuf |masscan |whatweb |wpscan )', line):
-                    commands.append(line)
+                # Skip empty, markdown headers, explanations
+                if not line or line.startswith("#") or line.startswith("```"):
+                    continue
+                # Remove leading $ or > or backticks
+                line = re.sub(r'^[$>]\s*', '', line)
+                line = line.strip('`').strip()
+                if not line:
+                    continue
+                # Check if it looks like a command
+                first_word = line.split()[0].split("/")[-1] if line.split() else ""
+                known_tools = {
+                    "nmap", "sudo", "masscan", "nikto", "gobuster", "dirb", "ffuf",
+                    "sqlmap", "hydra", "john", "hashcat", "airmon-ng", "airodump-ng",
+                    "aireplay-ng", "aircrack-ng", "wifite", "msfconsole", "msfvenom",
+                    "searchsploit", "whatweb", "wpscan", "enum4linux", "smbclient",
+                    "crackmapexec", "netdiscover", "tcpdump", "ettercap", "bettercap",
+                    "responder", "macchanger", "reaver", "wireshark", "socat", "chisel",
+                    "netcat", "nc", "curl", "wget", "ping", "traceroute", "whois",
+                    "dig", "host", "ip", "ifconfig", "iwconfig", "tor", "proxychains",
+                    "ssh", "fern-wifi-cracker", "medusa", "arp-scan", "hping3",
+                    "set", "beef-xss", "burpsuite", "zaproxy", "lynis", "openvas",
+                    "cat", "grep", "ls", "apt", "apt-get", "systemctl", "service",
+                }
+                if first_word in known_tools:
+                    cmd = line
+                    break
+                # If first line and no match, still use it (AI was told to give raw command)
+                if not cmd:
+                    cmd = line
 
-            if commands:
-                cmd = commands[0].strip()
-                self.terminal.appendPlainText(f"\n\n⚡ Auto-running: {cmd}\n")
+            if cmd:
+                self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
                 self._execute_command(cmd)
+            else:
+                self.terminal.appendPlainText(f"\n[AI] {response}\n")
 
         thread.token_received.connect(on_token)
         thread.finished.connect(on_done)
