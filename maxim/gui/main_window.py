@@ -720,39 +720,33 @@ class MaximWindow(QMainWindow):
                 existing.append(wl)
         return existing if existing else ["/usr/share/wordlists/rockyou.txt"]
 
-    def _build_crack_cmd(self, tool, filepath, hash_format=None):
-        """Build a multi-wordlist crack command that tries all available wordlists."""
+    def _build_crack_cmd(self, filepath, hashcat_mode):
+        """Build hashcat crack command: wordlists + rules, then brute force if not found."""
         wordlists = self._get_wordlists()
 
-        if tool == "aircrack":
-            # Aircrack-ng only takes one wordlist, so combine them
-            if len(wordlists) > 1:
-                combined = "' -w '".join(wordlists)
-                return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
-            return f"sudo aircrack-ng -w '{wordlists[0]}' '{filepath}'"
+        cmds = []
+        # Stage 1: Dictionary attack with rules on each wordlist
+        for wl in wordlists[:4]:
+            cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' '{wl}' -r /usr/share/hashcat/rules/best64.rule --force --potfile-disable -O 2>/dev/null")
 
-        elif tool == "john":
-            # John: run with each wordlist + rules for extra coverage
-            cmds = []
-            for wl in wordlists[:3]:  # Top 3 wordlists
-                fmt = f"--format={hash_format} " if hash_format else ""
-                cmds.append(f"john {fmt}--wordlist='{wl}' --rules=best64 '{filepath}'")
-            # Show results at end
-            fmt = f"--format={hash_format} " if hash_format else ""
-            cmds.append(f"john {fmt}--show '{filepath}'")
-            return " ; ".join(cmds)
+        # Check if cracked
+        cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' --show --force 2>/dev/null | grep -q ':' && echo 'CRACKED' || echo 'NOT_FOUND_IN_WORDLISTS'")
 
-        elif tool == "hashcat":
-            # Hashcat: use rules + multiple wordlists
-            cmds = []
-            for wl in wordlists[:3]:
-                cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wl}' -r /usr/share/hashcat/rules/best64.rule --force 2>/dev/null")
-            # Also try combinator/brute force for short passwords
-            cmds.append(f"hashcat -m {hash_format} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' --increment --force 2>/dev/null")
-            cmds.append(f"hashcat -m {hash_format} '{filepath}' --show 2>/dev/null")
-            return " ; ".join(cmds)
+        # Stage 2: Brute force — incremental from 1 to 10 chars
+        cmds.append(f"echo '⚡ Wordlists exhausted — BRUTEFORCING NOW...'")
+        # Try digits first (fastest)
+        cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' -a 3 '?d?d?d?d?d?d?d?d?d?d' --increment --increment-min 1 --force --potfile-disable -O 2>/dev/null")
+        # Try lowercase
+        cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' -a 3 '?l?l?l?l?l?l?l?l' --increment --increment-min 1 --force --potfile-disable -O 2>/dev/null")
+        # Try lowercase + digits
+        cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' -a 3 -1 '?l?d' '?1?1?1?1?1?1?1?1' --increment --increment-min 1 --force --potfile-disable -O 2>/dev/null")
+        # Try all printable chars (slowest but most thorough)
+        cmds.append(f"hashcat -m {hashcat_mode} '{filepath}' -a 3 '?a?a?a?a?a?a?a' --increment --increment-min 1 --force --potfile-disable -O 2>/dev/null")
 
-        return ""
+        # Final: show result
+        cmds.append(f"echo '=== FINAL RESULT ===' && hashcat -m {hashcat_mode} '{filepath}' --show --force 2>/dev/null")
+
+        return " ; ".join(cmds)
 
     def _analyze_file(self, filepath):
         """Auto-detect file type and crack/analyze immediately — no popups."""
@@ -760,16 +754,18 @@ class MaximWindow(QMainWindow):
         fname = os.path.basename(filepath)
 
         if ext in ('.cap', '.pcap'):
-            # WiFi capture — auto crack with all wordlists
+            # WiFi capture — convert to hashcat format first, then crack
             wl_count = len(self._get_wordlists())
-            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {wl_count} wordlists...\n")
-            self._execute_command(self._build_crack_cmd("aircrack", filepath))
+            out = filepath.rsplit('.', 1)[0] + '.hc22000'
+            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} ({wl_count} wordlists + brute force)...\n")
+            convert = f"hcxpcapngtool -o '{out}' '{filepath}' 2>/dev/null || aircrack-ng '{filepath}' -J '{filepath.rsplit('.', 1)[0]}' 2>/dev/null"
+            crack = self._build_crack_cmd(out, "22000")
+            self._execute_command(f"{convert} ; {crack}")
 
         elif ext in ('.hc22000', '.hccapx'):
-            # Hashcat WiFi format — multi wordlist + rules + brute force
             wl_count = len(self._get_wordlists())
-            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules + brute force)...\n")
-            self._execute_command(self._build_crack_cmd("hashcat", filepath, "22000"))
+            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + brute force)...\n")
+            self._execute_command(self._build_crack_cmd(filepath, "22000"))
 
         elif ext in ('.txt', '.hash'):
             # Hash file — auto-detect hash type and crack
@@ -790,33 +786,36 @@ class MaximWindow(QMainWindow):
             # Auto-detect by hash length
             wl_count = len(self._get_wordlists())
 
-            if hash_len == 32:
-                self.terminal.appendPlainText(f"Detected: MD5 (32 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-MD5"))
-            elif hash_len == 40:
-                self.terminal.appendPlainText(f"Detected: SHA1 (40 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA1"))
-            elif hash_len == 64:
-                self.terminal.appendPlainText(f"Detected: SHA256 (64 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA256"))
-            elif hash_len == 128:
-                self.terminal.appendPlainText(f"Detected: SHA512 (128 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA512"))
-            elif first_line.startswith('$2') or first_line.startswith('$2b$'):
-                self.terminal.appendPlainText(f"Detected: bcrypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "3200"))
+            # Map hash length/format to hashcat mode
+            mode = None
+            name = ""
+            if first_line.startswith('$2') or first_line.startswith('$2b$'):
+                mode, name = "3200", "bcrypt"
             elif first_line.startswith('$6$'):
-                self.terminal.appendPlainText(f"Detected: SHA512crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "1800"))
+                mode, name = "1800", "SHA512crypt"
             elif first_line.startswith('$5$'):
-                self.terminal.appendPlainText(f"Detected: SHA256crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "7400"))
+                mode, name = "7400", "SHA256crypt"
             elif first_line.startswith('$1$'):
-                self.terminal.appendPlainText(f"Detected: MD5crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "500"))
+                mode, name = "500", "MD5crypt"
+            elif first_line.startswith('$apr1$'):
+                mode, name = "1600", "Apache MD5"
+            elif first_line.startswith('$P$') or first_line.startswith('$H$'):
+                mode, name = "400", "WordPress/phpBB"
+            elif hash_len == 32:
+                mode, name = "0", "MD5"
+            elif hash_len == 40:
+                mode, name = "100", "SHA1"
+            elif hash_len == 64:
+                mode, name = "1400", "SHA256"
+            elif hash_len == 128:
+                mode, name = "1700", "SHA512"
+            elif hash_len == 16:
+                mode, name = "1000", "NTLM"
             else:
-                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying all methods\n")
-                self._execute_command(self._build_crack_cmd("john", filepath))
+                mode, name = "0", f"Unknown ({hash_len} chars, trying MD5)"
+
+            self.terminal.appendPlainText(f"Detected: {name} — {wl_count} wordlists + rules + brute force\n")
+            self._execute_command(self._build_crack_cmd(filepath, mode))
 
         elif ext in ('.csv', '.xml'):
             # Scan results
