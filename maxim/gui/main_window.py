@@ -23,7 +23,6 @@ from PyQt5.QtGui import QFont, QTextCursor
 from maxim.gui.styles import MAIN_STYLE
 from maxim.core.engine import ProcessRunner, Session, ToolInstaller
 from maxim.core.ai_assistant import AIManager, SmartRouter, PROVIDERS, get_api_key, set_api_key
-from maxim.core.online_kb import lookup_command
 from maxim.core.updater import check_for_update, perform_update, get_current_version
 from maxim.core.workflows import NATURAL_COMMANDS
 from maxim.tools.tool_registry import (
@@ -53,14 +52,25 @@ class AIStreamSignal(QThread):
     token_received = pyqtSignal(str)
     finished = pyqtSignal(str)
 
-    def __init__(self, ai_manager, message):
+    def __init__(self, ai_manager, message, enrich_online=False):
         super().__init__()
         self.ai = ai_manager
         self.message = message
+        self.enrich_online = enrich_online
 
     def run(self):
         try:
-            response = self.ai.chat(self.message, stream_callback=lambda t: self.token_received.emit(t))
+            msg = self.message
+            # Online lookup runs in this background thread (not UI thread)
+            if self.enrich_online:
+                try:
+                    from maxim.core.online_kb import lookup_command
+                    kb = lookup_command(self.message)
+                    if kb:
+                        msg = f"{self.message}\n\nReference commands:\n{kb[:1500]}\n\nUsing the above, give the exact command."
+                except Exception:
+                    pass
+            response = self.ai.chat(msg, stream_callback=lambda t: self.token_received.emit(t))
             self.finished.emit(response)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -442,22 +452,9 @@ class MaximWindow(QMainWindow):
 
     def _ai_execute(self, query):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
-        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...")
+        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
 
-        # Enrich with online knowledge
-        kb_result = ""
-        try:
-            kb_result = lookup_command(query)
-        except Exception:
-            pass
-
-        if kb_result:
-            enhanced_query = f"{query}\n\nReference commands from knowledge base:\n{kb_result[:1500]}\n\nUsing the above as reference, give me the exact command for what the user asked."
-            self.terminal.appendPlainText("📚 Found reference commands online\n")
-        else:
-            enhanced_query = f"{query}"
-
-        thread = AIStreamSignal(self.ai, enhanced_query)
+        thread = AIStreamSignal(self.ai, query, enrich_online=True)
 
         def on_done(response):
             self._set_running(False)
