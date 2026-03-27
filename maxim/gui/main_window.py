@@ -659,22 +659,72 @@ class MaximWindow(QMainWindow):
                 return True
         return False
 
-    def _replace_wifi_iface(self, cmd, iface):
-        """Replace wlan0/wlan0mon in command with the selected interface."""
-        # Replace monitor mode interface name
-        mon_name = f"{iface}mon"
+    def _detect_monitor_name(self, iface):
+        """Detect the actual monitor mode interface name after airmon-ng start."""
+        try:
+            result = subprocess.run(
+                "iw dev 2>/dev/null | grep Interface | awk '{print $2}'",
+                shell=True, capture_output=True, text=True, timeout=5
+            )
+            all_ifaces = [i.strip() for i in result.stdout.strip().split('\n') if i.strip()]
+            # Look for monitor interface: iface + "mon", or any interface with "mon"
+            for i in all_ifaces:
+                if i == f"{iface}mon":
+                    return i
+                if i.startswith(iface) and "mon" in i:
+                    return i
+            # Check for any mon interface on same phy
+            for i in all_ifaces:
+                if "mon" in i:
+                    return i
+            return f"{iface}mon"  # fallback
+        except Exception:
+            return f"{iface}mon"
+
+    def _replace_wifi_iface(self, cmd, iface, mon_name):
+        """Replace wlan0/wlan0mon in command with the selected interfaces."""
         cmd = cmd.replace("wlan0mon", mon_name)
-        # Replace base interface (but not if already replaced above)
         cmd = re.sub(r'\bwlan0\b', iface, cmd)
         return cmd
 
+    def _start_monitor_mode(self, iface, keep_iface):
+        """Start monitor mode on selected adapter, keep other adapter working.
+        Returns the monitor interface name."""
+        self.terminal.appendPlainText(f"\n[WiFi] Starting monitor mode on {iface}...\n")
+        if keep_iface:
+            self.terminal.appendPlainText(f"[WiFi] Keeping {keep_iface} for regular WiFi.\n")
+
+        # Use the process runner (has sudo password) for all commands
+        # Step 1: Kill interfering processes
+        code, out, _ = self.runner.run(f"sudo airmon-ng check kill")
+        if out.strip():
+            self.terminal.appendPlainText(out)
+
+        # Step 2: Start monitor mode
+        code, out, _ = self.runner.run(f"sudo airmon-ng start {iface}")
+        if out.strip():
+            self.terminal.appendPlainText(out)
+
+        # Step 3: Detect actual monitor interface name
+        mon_name = self._detect_monitor_name(iface)
+
+        # Step 4: Restart NetworkManager so the other adapter reconnects
+        if keep_iface:
+            self.runner.run("sudo systemctl restart NetworkManager")
+            self.terminal.appendPlainText(f"[WiFi] NetworkManager restarted — {keep_iface} reconnecting.\n")
+
+        self.terminal.appendPlainText(f"[WiFi] Monitor interface: {mon_name}\n\n")
+        return mon_name
+
     def _restore_network(self):
         """Restore network after monitor mode and reset adapter selection."""
+        mon = getattr(self, '_monitor_iface_name', None)
         iface = getattr(self, '_selected_wifi_iface', 'wlan0')
-        mon = f"{iface}mon"
         self._wifi_adapter_selected = False
+        self._monitor_iface_name = None
+        stop_cmd = f"sudo airmon-ng stop {mon} 2>/dev/null; " if mon else ""
         self._execute_command(
-            f"sudo airmon-ng stop {mon} 2>/dev/null; "
+            f"{stop_cmd}"
             f"sudo systemctl restart NetworkManager; "
             f"sudo systemctl restart wpa_supplicant; "
             f"sudo dhclient"
@@ -692,19 +742,27 @@ class MaximWindow(QMainWindow):
 
     def _execute_command(self, cmd, as_root=False):
         # WiFi adapter selection — ask which adapter for monitor mode
-        if self._is_wifi_command(cmd) and not getattr(self, '_wifi_adapter_selected', False):
-            iface, keep = self._select_wifi_adapter()
-            if iface is None:
-                self.terminal.appendPlainText("\n[!] WiFi operation cancelled.\n")
-                return
-            self._selected_wifi_iface = iface
-            self._wifi_adapter_selected = True
-            # Replace wlan0 with selected interface
-            cmd = self._replace_wifi_iface(cmd, iface)
-            self.terminal.appendPlainText(f"\n[WiFi] Monitor mode: {iface} | Regular WiFi: {keep or 'none'}\n")
-        elif self._is_wifi_command(cmd) and getattr(self, '_wifi_adapter_selected', False):
-            # Already selected — reuse same adapter
-            cmd = self._replace_wifi_iface(cmd, self._selected_wifi_iface)
+        if self._is_wifi_command(cmd):
+            if not getattr(self, '_wifi_adapter_selected', False):
+                iface, keep = self._select_wifi_adapter()
+                if iface is None:
+                    self.terminal.appendPlainText("\n[!] WiFi operation cancelled.\n")
+                    return
+                self._selected_wifi_iface = iface
+                self._keep_wifi_iface = keep
+                self._wifi_adapter_selected = True
+
+                # Start monitor mode and detect actual mon interface name
+                mon_name = self._start_monitor_mode(iface, keep)
+                self._monitor_iface_name = mon_name
+
+            mon_name = getattr(self, '_monitor_iface_name', f"{self._selected_wifi_iface}mon")
+            # Replace interface names in command
+            cmd = self._replace_wifi_iface(cmd, self._selected_wifi_iface, mon_name)
+            # Remove airmon-ng check kill / airmon-ng start from command — already done
+            cmd = re.sub(r'sudo\s+airmon-ng\s+check\s+kill\s*[;&|]*\s*', '', cmd)
+            cmd = re.sub(r'sudo\s+airmon-ng\s+start\s+\S+\s*[;&|]*\s*', '', cmd)
+            cmd = cmd.strip().strip(';&|').strip()
         # Auto-add sudo
         if not cmd.strip().startswith("sudo ") and not cmd.strip().startswith("echo "):
             first_word = cmd.strip().split()[0] if cmd.strip() else ""
