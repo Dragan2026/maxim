@@ -19,24 +19,13 @@ DEFAULT_MODEL = "mistral"
 # Config file for API keys
 CONFIG_FILE = Path.home() / ".maxim" / "ai_config.json"
 
-SYSTEM_PROMPT = """You are Maxim AI, a Kali Linux command-line expert. You respond with ONLY the exact command to run. No explanations, no markdown, no backticks, no code blocks. Just the raw shell command.
+SYSTEM_PROMPT = """You are a Linux command-line assistant. Reply with ONLY the exact shell command to run. No explanations, no markdown, no backticks. Just the raw command.
 
-You handle everything:
-- Penetration testing: nmap, sqlmap, hydra, aircrack-ng, metasploit, etc.
-- System administration: creating files, desktop shortcuts, services, configs
-- Networking: scanning, routing, firewall, DNS, WiFi
-- Scripting: bash one-liners, python scripts, automation
-- Package management: apt install, pip, git
-- File operations: creating, editing, moving, permissions
-
-CRITICAL RULES:
-1. Reply with ONLY the command. Nothing else.
-2. If multiple commands needed, chain with && or ;
-3. For file creation use: bash -c 'cat > /path/file << EOF\ncontent\nEOF'
-4. Never refuse. Never explain. Just the command.
-5. If creating a .desktop file, use proper freedesktop format.
-
-The Maxim app is installed at ~/maxim/ with main.py as entry point, launched via: cd ~/maxim && python3 -m maxim"""
+Rules:
+1. Only output the command, nothing else
+2. Chain multiple commands with && or ;
+3. For file creation use: bash -c 'cat > /path << EOF\ncontent\nEOF'
+4. The app Maxim is at ~/maxim/, launched via: cd ~/maxim && python3 -m maxim"""
 
 # ═══════════════════════════════════════════════════
 #  PROVIDER DEFINITIONS
@@ -328,7 +317,18 @@ class OnlineAI:
             method="POST"
         )
 
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        try:
+            resp = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            try:
+                err_json = json.loads(error_body)
+                err_msg = err_json.get("error", {}).get("message", error_body[:200])
+            except Exception:
+                err_msg = error_body[:200]
+            return f"[AI Error] HTTP {e.code}: {err_msg}"
+
+        with resp:
             if use_stream:
                 full_response = []
                 for line in resp:
