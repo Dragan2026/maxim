@@ -677,30 +677,14 @@ class MaximWindow(QMainWindow):
         self._analyze_file(filepath)
 
     def _analyze_file(self, filepath):
-        """Analyze a file — auto-detect type and offer actions."""
+        """Auto-detect file type and crack/analyze immediately — no popups."""
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
 
         if ext in ('.cap', '.pcap'):
-            # WiFi capture — offer options
-            choices = [
-                "Crack WPA with aircrack-ng (rockyou.txt)",
-                "Convert to hashcat format (hc22000)",
-                "Analyze with tshark",
-                "View handshakes with aircrack-ng",
-            ]
-            choice, ok = QInputDialog.getItem(self, f"Analyze: {fname}", "What to do with this capture file?", choices, 0, False)
-            if not ok:
-                return
-            if "Crack WPA" in choice:
-                self._execute_command(f"sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt '{filepath}'")
-            elif "Convert to hashcat" in choice:
-                out = filepath.rsplit('.', 1)[0] + '.hc22000'
-                self._execute_command(f"hcxpcapngtool -o '{out}' '{filepath}'")
-            elif "Analyze with tshark" in choice:
-                self._execute_command(f"tshark -r '{filepath}' -Y 'eapol' 2>/dev/null | head -50")
-            elif "View handshakes" in choice:
-                self._execute_command(f"sudo aircrack-ng '{filepath}'")
+            # WiFi capture — auto crack with aircrack-ng
+            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname}...\n")
+            self._execute_command(f"sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt '{filepath}'")
 
         elif ext in ('.hc22000', '.hccapx'):
             # Hashcat WiFi format
@@ -708,58 +692,58 @@ class MaximWindow(QMainWindow):
             self._execute_command(f"hashcat -m 22000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
 
         elif ext in ('.txt', '.hash'):
-            # Hash file — detect type and crack
-            choices = [
-                "Crack MD5 (john)",
-                "Crack MD5 (hashcat)",
-                "Crack SHA1 (john)",
-                "Crack SHA1 (hashcat)",
-                "Crack SHA256 (john)",
-                "Crack SHA256 (hashcat)",
-                "Crack NTLM (john)",
-                "Crack NTLM (hashcat)",
-                "Crack SHA512 (john)",
-                "Crack SHA512 (hashcat)",
-                "Crack bcrypt (hashcat)",
-                "Crack WPA (hashcat)",
-                "Identify hash type first",
-                "Show file contents",
-            ]
-            choice, ok = QInputDialog.getItem(self, f"Crack: {fname}", "Select hash type:", choices, 0, False)
-            if not ok:
+            # Hash file — auto-detect hash type and crack
+            # Read first line to detect type
+            self.terminal.appendPlainText(f"\n⚡ Auto-detecting hash type in {fname}...\n")
+            try:
+                with open(filepath, 'r') as f:
+                    first_line = f.readline().strip()
+            except Exception:
+                first_line = ""
+
+            if not first_line:
+                self.terminal.appendPlainText("[!] Empty file\n")
                 return
-            if "MD5 (john)" in choice:
+
+            hash_len = len(first_line.split(':')[0]) if ':' in first_line else len(first_line)
+
+            # Auto-detect by hash length
+            if hash_len == 32:
+                # MD5
+                self.terminal.appendPlainText(f"Detected: MD5 (32 chars)\n")
                 self._execute_command(f"john --format=Raw-MD5 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-MD5 --show '{filepath}'")
-            elif "MD5 (hashcat)" in choice:
-                self._execute_command(f"hashcat -m 0 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "SHA1 (john)" in choice:
+            elif hash_len == 40:
+                # SHA1
+                self.terminal.appendPlainText(f"Detected: SHA1 (40 chars)\n")
                 self._execute_command(f"john --format=Raw-SHA1 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA1 --show '{filepath}'")
-            elif "SHA1 (hashcat)" in choice:
-                self._execute_command(f"hashcat -m 100 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "SHA256 (john)" in choice:
+            elif hash_len == 64:
+                # SHA256
+                self.terminal.appendPlainText(f"Detected: SHA256 (64 chars)\n")
                 self._execute_command(f"john --format=Raw-SHA256 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA256 --show '{filepath}'")
-            elif "SHA256 (hashcat)" in choice:
-                self._execute_command(f"hashcat -m 1400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "NTLM (john)" in choice:
-                self._execute_command(f"john --format=NT --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=NT --show '{filepath}'")
-            elif "NTLM (hashcat)" in choice:
-                self._execute_command(f"hashcat -m 1000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "SHA512 (john)" in choice:
+            elif hash_len == 128:
+                # SHA512
+                self.terminal.appendPlainText(f"Detected: SHA512 (128 chars)\n")
                 self._execute_command(f"john --format=Raw-SHA512 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA512 --show '{filepath}'")
-            elif "SHA512 (hashcat)" in choice:
-                self._execute_command(f"hashcat -m 1700 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "bcrypt" in choice:
+            elif first_line.startswith('$2') or first_line.startswith('$2b$'):
+                # bcrypt
+                self.terminal.appendPlainText(f"Detected: bcrypt\n")
                 self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "WPA" in choice:
-                self._execute_command(f"hashcat -m 22000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "Identify" in choice:
-                self._execute_command(f"echo '--- Hash contents ---' && head -5 '{filepath}' && echo '--- Hash ID ---' && hashid -f '{filepath}' 2>/dev/null || hash-identifier < '{filepath}'")
-            elif "bcrypt" in choice:
-                self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
-            elif "Identify" in choice:
-                self._execute_command(f"head -5 '{filepath}' && echo '---' && hashid -f '{filepath}'")
-            elif "Show file" in choice:
-                self._execute_command(f"cat '{filepath}'")
+            elif first_line.startswith('$6$'):
+                # SHA512crypt
+                self.terminal.appendPlainText(f"Detected: SHA512crypt\n")
+                self._execute_command(f"hashcat -m 1800 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif first_line.startswith('$5$'):
+                # SHA256crypt
+                self.terminal.appendPlainText(f"Detected: SHA256crypt\n")
+                self._execute_command(f"hashcat -m 7400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            elif first_line.startswith('$1$'):
+                # MD5crypt
+                self.terminal.appendPlainText(f"Detected: MD5crypt\n")
+                self._execute_command(f"hashcat -m 500 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            else:
+                # Unknown — let john auto-detect
+                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
+                self._execute_command(f"john --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --show '{filepath}'")
 
         elif ext in ('.csv', '.xml'):
             # Scan results
