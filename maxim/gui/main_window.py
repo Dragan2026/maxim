@@ -23,6 +23,7 @@ from PyQt5.QtGui import QFont, QTextCursor
 from maxim.gui.styles import MAIN_STYLE
 from maxim.core.engine import ProcessRunner, Session, ToolInstaller
 from maxim.core.ai_assistant import AIManager, SmartRouter, PROVIDERS, get_api_key, set_api_key
+from maxim.core.online_kb import lookup_command
 from maxim.core.updater import check_for_update, perform_update, get_current_version
 from maxim.core.workflows import NATURAL_COMMANDS
 from maxim.tools.tool_registry import (
@@ -441,9 +442,20 @@ class MaximWindow(QMainWindow):
 
     def _ai_execute(self, query):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
-        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
+        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...")
 
-        enhanced_query = f"{query}"
+        # Enrich with online knowledge
+        kb_result = ""
+        try:
+            kb_result = lookup_command(query)
+        except Exception:
+            pass
+
+        if kb_result:
+            enhanced_query = f"{query}\n\nReference commands from knowledge base:\n{kb_result[:1500]}\n\nUsing the above as reference, give me the exact command for what the user asked."
+            self.terminal.appendPlainText("📚 Found reference commands online\n")
+        else:
+            enhanced_query = f"{query}"
 
         thread = AIStreamSignal(self.ai, enhanced_query)
 
