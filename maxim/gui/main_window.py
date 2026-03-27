@@ -790,11 +790,21 @@ class MaximWindow(QMainWindow):
         os.makedirs(out_dir, exist_ok=True)
 
         # Step 1: Quick scan to find the ESSID — 15 second scan
+        # Run airodump-ng directly (not through runner — it would open external terminal)
         self.terminal.appendPlainText(f"[1/4] Scanning for '{essid}'... (15 seconds)\n")
+        QApplication.processEvents()
         scan_file = f"/tmp/maxim_scan_{essid.replace(' ', '_')}"
-        code, out, _ = self.runner.run(
-            f"sudo timeout 15 airodump-ng --essid '{essid}' --write-interval 1 -w '{scan_file}' --output-format csv {mon}"
-        )
+        # Remove old scan files
+        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
+        # Run scan inline with timeout
+        scan_cmd = f"sudo timeout 15 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon}"
+        if self.runner._sudo_password:
+            pw = self.runner._escape_pw()
+            scan_cmd = scan_cmd.replace("sudo ", f"echo '{pw}' | sudo -S ")
+        try:
+            subprocess.run(scan_cmd, shell=True, capture_output=True, timeout=25)
+        except subprocess.TimeoutExpired:
+            pass  # Expected — timeout kills airodump-ng
 
         # Step 2: Parse CSV to find BSSID and channel
         bssid = None
@@ -808,7 +818,6 @@ class MaximWindow(QMainWindow):
                         if len(parts) >= 14:
                             candidate_bssid = parts[0].strip()
                             candidate_channel = parts[3].strip()
-                            # Validate BSSID format
                             if re.match(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$', candidate_bssid):
                                 bssid = candidate_bssid
                                 channel = candidate_channel.strip()
@@ -817,7 +826,7 @@ class MaximWindow(QMainWindow):
             pass
 
         # Cleanup scan files
-        self.runner.run(f"rm -f {scan_file}-* 2>/dev/null")
+        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
 
         if not bssid or not channel:
             self.terminal.appendPlainText(f"\n[!] Could not find network '{essid}'.\n")
