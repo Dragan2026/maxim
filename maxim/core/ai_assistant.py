@@ -35,6 +35,8 @@ Rules:
 10. Crack captured handshake: sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt capture-01.cap
 11. When user gives ESSID name, scan first to find BSSID and channel, then target it
 12. When user gives BSSID directly, use it with airodump-ng to capture handshake
+13. To add text/password to a file: echo 'text' | sudo tee -a /path/to/file
+14. rockyou.txt may be gzipped — first: sudo gzip -d /usr/share/wordlists/rockyou.txt.gz 2>/dev/null; then append
 
 COMMAND REFERENCE (use these exact commands):
 """ + COMMAND_KB
