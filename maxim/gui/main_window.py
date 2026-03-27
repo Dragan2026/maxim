@@ -640,11 +640,13 @@ class MaximWindow(QMainWindow):
         if m:
             return m.group(1)
 
-        # john --show with username: "user:password" after --show command
-        # hashcat with $format$: "$hash$:password"
-        m = re.match(r'^\$[^:]+\$[^:]*:(.+)$', stripped)
+        # john --show: "?:password" or "user:password" (short prefix before colon)
+        m = re.match(r'^[^:]{1,64}:(.+)$', stripped)
         if m:
-            return m.group(1)
+            pw = m.group(1)
+            # Filter out status/info lines (contain spaces or known non-password patterns)
+            if not any(x in pw for x in ['password hash', 'left to crack', 'No password', 'Loaded ', 'Using ']):
+                return pw
 
         return None
 
@@ -689,6 +691,11 @@ class MaximWindow(QMainWindow):
         # If cracking finished with no password found, offer brute force
         is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
         if is_crack_cmd and not getattr(self, '_found_password', None) and not getattr(self, '_is_bruteforcing', False):
+            # Check terminal output for "X password hash cracked" with X > 0
+            text = self.terminal.toPlainText()[-500:]
+            cracked_match = re.search(r'(\d+) password hash(?:es)? cracked', text)
+            if cracked_match and int(cracked_match.group(1)) > 0:
+                return  # Password was cracked, just not detected by regex
             self._offer_brute_force(cmd)
 
     def _offer_brute_force(self, original_cmd):
