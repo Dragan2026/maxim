@@ -5,6 +5,7 @@ Maxim Main Window — clean CLI-style pentesting interface.
 import os
 import re
 import html
+import subprocess
 import webbrowser
 import threading
 from datetime import datetime
@@ -18,7 +19,7 @@ from PyQt5.QtWidgets import (
     QTextBrowser, QProgressBar, QFileDialog,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QTextCursor, QTextCharFormat, QColor
+from PyQt5.QtGui import QFont, QTextCursor
 
 from maxim.gui.styles import MAIN_STYLE
 from maxim.core.engine import ProcessRunner, Session, ToolInstaller
@@ -287,9 +288,7 @@ class MaximWindow(QMainWindow):
             }
             QPushButton:hover { border-color: #ef4444; color: #f87171; }
         """)
-        restore_net_btn.clicked.connect(lambda: self._execute_command(
-            "sudo airmon-ng stop wlan0mon 2>/dev/null; sudo systemctl restart NetworkManager; sudo systemctl restart wpa_supplicant; sudo dhclient"
-        ))
+        restore_net_btn.clicked.connect(self._restore_network)
         qbar.addWidget(restore_net_btn)
 
         clear_btn = QPushButton("Clear")
@@ -591,6 +590,97 @@ class MaximWindow(QMainWindow):
         self._ai_thread = thread
 
     # ═══════════════════════════════════════
+    #  WIFI ADAPTER SELECTION
+    # ═══════════════════════════════════════
+
+    WIFI_TOOLS = {"airmon-ng", "airodump-ng", "aireplay-ng", "wifite", "wash", "reaver", "airbase-ng"}
+
+    def _detect_wifi_interfaces(self):
+        """Detect available wireless interfaces."""
+        try:
+            result = subprocess.run(
+                "iw dev 2>/dev/null | grep Interface | awk '{print $2}'",
+                shell=True, capture_output=True, text=True, timeout=5
+            )
+            ifaces = [i.strip() for i in result.stdout.strip().split('\n') if i.strip()]
+            if not ifaces:
+                # Fallback: check /sys/class/net
+                result2 = subprocess.run(
+                    "ls /sys/class/net/ | grep -E '^wl'",
+                    shell=True, capture_output=True, text=True, timeout=5
+                )
+                ifaces = [i.strip() for i in result2.stdout.strip().split('\n') if i.strip()]
+            return ifaces
+        except Exception:
+            return []
+
+    def _select_wifi_adapter(self):
+        """Show popup to select which wireless adapter to use for monitor mode.
+        Returns (monitor_iface, keep_iface) or (None, None) if cancelled."""
+        ifaces = self._detect_wifi_interfaces()
+
+        if not ifaces:
+            QMessageBox.warning(self, "No WiFi Adapter",
+                "No wireless interfaces found.\n\nMake sure a WiFi adapter is connected.")
+            return None, None
+
+        if len(ifaces) == 1:
+            # Only one adapter — use it, no choice needed
+            return ifaces[0], None
+
+        # Multiple adapters — let user pick which one for monitor mode
+        items = [f"{i} — use for MONITOR mode" for i in ifaces]
+        choice, ok = QInputDialog.getItem(
+            self, "Select WiFi Adapter",
+            "Multiple wireless adapters detected.\n\n"
+            "Select which adapter to use for MONITOR MODE.\n"
+            "The other adapter(s) will keep normal WiFi connection.\n",
+            items, 0, False
+        )
+        if not ok:
+            return None, None
+
+        selected_idx = items.index(choice)
+        monitor_iface = ifaces[selected_idx]
+        keep_ifaces = [i for i in ifaces if i != monitor_iface]
+        return monitor_iface, keep_ifaces[0] if keep_ifaces else None
+
+    def _is_wifi_command(self, cmd):
+        """Check if command involves WiFi tools that need monitor mode."""
+        parts = re.split(r'[;&|]+', cmd)
+        for part in parts:
+            words = part.strip().split()
+            if not words:
+                continue
+            tool = words[0]
+            if tool == "sudo" and len(words) > 1:
+                tool = words[1]
+            if tool in self.WIFI_TOOLS:
+                return True
+        return False
+
+    def _replace_wifi_iface(self, cmd, iface):
+        """Replace wlan0/wlan0mon in command with the selected interface."""
+        # Replace monitor mode interface name
+        mon_name = f"{iface}mon"
+        cmd = cmd.replace("wlan0mon", mon_name)
+        # Replace base interface (but not if already replaced above)
+        cmd = re.sub(r'\bwlan0\b', iface, cmd)
+        return cmd
+
+    def _restore_network(self):
+        """Restore network after monitor mode and reset adapter selection."""
+        iface = getattr(self, '_selected_wifi_iface', 'wlan0')
+        mon = f"{iface}mon"
+        self._wifi_adapter_selected = False
+        self._execute_command(
+            f"sudo airmon-ng stop {mon} 2>/dev/null; "
+            f"sudo systemctl restart NetworkManager; "
+            f"sudo systemctl restart wpa_supplicant; "
+            f"sudo dhclient"
+        )
+
+    # ═══════════════════════════════════════
     #  COMMAND EXECUTION
     # ═══════════════════════════════════════
 
@@ -601,16 +691,30 @@ class MaximWindow(QMainWindow):
     }
 
     def _execute_command(self, cmd, as_root=False):
+        # WiFi adapter selection — ask which adapter for monitor mode
+        if self._is_wifi_command(cmd) and not getattr(self, '_wifi_adapter_selected', False):
+            iface, keep = self._select_wifi_adapter()
+            if iface is None:
+                self.terminal.appendPlainText("\n[!] WiFi operation cancelled.\n")
+                return
+            self._selected_wifi_iface = iface
+            self._wifi_adapter_selected = True
+            # Replace wlan0 with selected interface
+            cmd = self._replace_wifi_iface(cmd, iface)
+            self.terminal.appendPlainText(f"\n[WiFi] Monitor mode: {iface} | Regular WiFi: {keep or 'none'}\n")
+        elif self._is_wifi_command(cmd) and getattr(self, '_wifi_adapter_selected', False):
+            # Already selected — reuse same adapter
+            cmd = self._replace_wifi_iface(cmd, self._selected_wifi_iface)
         # Auto-add sudo
         if not cmd.strip().startswith("sudo ") and not cmd.strip().startswith("echo "):
             first_word = cmd.strip().split()[0] if cmd.strip() else ""
             if first_word in self.SUDO_TOOLS or as_root:
                 cmd = f"sudo {cmd}"
 
-        # Reset cracking state for each new command
+        # Reset brute force state for new crack commands
         is_crack = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
         if is_crack and not getattr(self, '_is_bruteforcing', False):
-            self._found_password = None
+            self._is_bruteforcing = False
 
         self._set_running(True, f"Running: {cmd[:60]}...")
 
@@ -629,74 +733,9 @@ class MaximWindow(QMainWindow):
         )
         self.current_thread.start()
 
-    def _extract_password(self, line):
-        """Extract the actual cracked password from tool output. Returns password or None."""
-        stripped = line.strip()
-        if not stripped:
-            return None
-
-        # Skip known john/hashcat status lines immediately
-        skip_patterns = [
-            'Using default', 'Loaded ', 'No password hashes',
-            'password hash', 'left to crack', 'Proceeding',
-            'Press ', 'Session ', 'Status', 'Speed', 'Remaining',
-            'Note:', 'Warning:', 'Cost ', 'Will run', 'Approaching',
-            'guesses:', 'see FAQ', 'OMP ', 'Node ',
-        ]
-        for sp in skip_patterns:
-            if sp in stripped:
-                return None
-
-        # aircrack-ng: "KEY FOUND! [ mysecretpassword ]"
-        m = re.search(r'KEY FOUND!\s*\[\s*(.+?)\s*\]', stripped)
-        if m:
-            return m.group(1)
-
-        # hashcat output: "hash:password" (hash is hex 32+ chars)
-        m = re.match(r'^[a-fA-F0-9]{32,}:(.+)$', stripped)
-        if m:
-            return m.group(1)
-
-        # john --show: "?:password" (? is placeholder when no username)
-        m = re.match(r'^\?:(.+)$', stripped)
-        if m:
-            return m.group(1)
-
-        # john --show with $hash$ format: "$type$salt$hash:password"
-        m = re.match(r'^\$[^:]+:(.+)$', stripped)
-        if m:
-            return m.group(1)
-
-        # hashcat --show: "hash:password" where hash starts with $
-        # Already covered above
-
-        return None
-
     def _on_output_line(self, line):
         self.terminal.moveCursor(QTextCursor.End)
-        password = self._extract_password(line)
-        if password:
-            self._found_password = password
-            # Print the normal line first
-            self.terminal.insertPlainText(line)
-            # Highlight the password
-            cursor = self.terminal.textCursor()
-            highlight_fmt = QTextCharFormat()
-            highlight_fmt.setForeground(QColor("#000000"))
-            highlight_fmt.setBackground(QColor("#4ade80"))
-            highlight_fmt.setFontWeight(QFont.Bold)
-            highlight_fmt.setFontPointSize(12)
-            cursor.insertText(f"\n  PASSWORD: {password} \n\n", highlight_fmt)
-            # Reset to default font so subsequent output stays normal
-            default_fmt = QTextCharFormat()
-            default_fmt.setFontWeight(QFont.Normal)
-            default_fmt.setFontPointSize(self.terminal.font().pointSizeF())
-            default_fmt.setForeground(QColor("#e4e4e7"))
-            default_fmt.setBackground(QColor("transparent"))
-            cursor.setCharFormat(default_fmt)
-            self.terminal.setTextCursor(cursor)
-        else:
-            self.terminal.insertPlainText(line)
+        self.terminal.insertPlainText(line)
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -714,8 +753,16 @@ class MaximWindow(QMainWindow):
 
         # If cracking finished with no password found, offer brute force
         is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
-        if is_crack_cmd and not getattr(self, '_found_password', None) and not getattr(self, '_is_bruteforcing', False):
-            self._offer_brute_force(cmd)
+        if is_crack_cmd and not getattr(self, '_is_bruteforcing', False):
+            # Check if password was actually cracked in the output
+            text = self.terminal.toPlainText()[-1000:]
+            found = (
+                re.search(r'KEY FOUND!\s*\[', text) or
+                re.search(r'\d+ password hash(?:es)? cracked', text) or
+                re.search(r'^\?:.+', text, re.MULTILINE)
+            )
+            if not found:
+                self._offer_brute_force(cmd)
 
     def _offer_brute_force(self, original_cmd):
         """No password found — ask user if they want to brute force."""
@@ -873,7 +920,6 @@ class MaximWindow(QMainWindow):
 
     def _analyze_file(self, filepath):
         """Auto-detect file type and crack/analyze immediately — no popups."""
-        self._found_password = None
         self._is_bruteforcing = False
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
