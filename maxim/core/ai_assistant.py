@@ -305,10 +305,12 @@ class OnlineAI:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "application/json",
         }
         if self.provider_id == "openrouter":
             headers["HTTP-Referer"] = "https://maxim.local"
-            headers["X-Title"] = "Maxim Pentest Suite"
+            headers["X-Title"] = "Maxim"
 
         req = urllib.request.Request(
             self.provider["url"],
