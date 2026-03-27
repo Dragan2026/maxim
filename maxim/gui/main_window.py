@@ -401,6 +401,27 @@ class MaximWindow(QMainWindow):
         tools_menu.addAction("Start Tor", lambda: self._execute_command("sudo service tor start"))
         tools_menu.addAction("Start PostgreSQL (MSF)", lambda: self._execute_command("sudo service postgresql start"))
 
+        wordlist_menu = menubar.addMenu("Wordlists")
+        wordlist_menu.addAction("Download SecLists (large)", lambda: self._execute_command(
+            "sudo apt-get install -y seclists || (cd /usr/share/wordlists && sudo git clone --depth 1 https://github.com/danielmiessler/SecLists.git seclists)"
+        ))
+        wordlist_menu.addAction("Download CrackStation (huge 15GB)", lambda: self._execute_command(
+            "cd /usr/share/wordlists && sudo wget -c https://crackstation.net/files/crackstation.txt.gz && sudo gunzip crackstation.txt.gz"
+        ))
+        wordlist_menu.addAction("Download Weakpass (2GB)", lambda: self._execute_command(
+            "cd /usr/share/wordlists && sudo wget -c https://weakpass.com/wordlist/1851 -O weakpass_3.txt"
+        ))
+        wordlist_menu.addAction("Download WiFi Wordlists", lambda: self._execute_command(
+            "cd /usr/share/wordlists && sudo wget -c https://raw.githubusercontent.com/praetorian-inc/Hob0Rules/master/wordlists/wordlist.txt -O wifi-common.txt"
+        ))
+        wordlist_menu.addSeparator()
+        wordlist_menu.addAction("Unzip rockyou.txt", lambda: self._execute_command(
+            "sudo gunzip -k /usr/share/wordlists/rockyou.txt.gz 2>/dev/null; ls -lh /usr/share/wordlists/rockyou.txt"
+        ))
+        wordlist_menu.addAction("Show installed wordlists", lambda: self._execute_command(
+            "echo '=== Wordlists ===' && find /usr/share/wordlists -name '*.txt' -o -name '*.lst' 2>/dev/null | head -50 && echo && du -sh /usr/share/wordlists/* 2>/dev/null"
+        ))
+
         ai_menu = menubar.addMenu("AI")
 
         offline_menu = ai_menu.addMenu("Offline (Ollama)")
@@ -676,20 +697,79 @@ class MaximWindow(QMainWindow):
             return
         self._analyze_file(filepath)
 
+    # Wordlists in order of priority — tries each until cracked
+    WORDLISTS = [
+        "/usr/share/wordlists/rockyou.txt",
+        "/usr/share/wordlists/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
+        "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
+        "/usr/share/wordlists/seclists/Passwords/xato-net-10-million-passwords-1000000.txt",
+        "/usr/share/seclists/Passwords/xato-net-10-million-passwords-1000000.txt",
+        "/usr/share/wordlists/seclists/Passwords/darkweb2017-top10000.txt",
+        "/usr/share/seclists/Passwords/darkweb2017-top10000.txt",
+        "/usr/share/wordlists/wifite.txt",
+        "/usr/share/wordlists/fasttrack.txt",
+        "/usr/share/wordlists/metasploit/password.lst",
+        "/usr/share/john/password.lst",
+    ]
+
+    def _get_wordlists(self):
+        """Return list of existing wordlists on this system."""
+        existing = []
+        for wl in self.WORDLISTS:
+            if os.path.exists(wl):
+                existing.append(wl)
+        return existing if existing else ["/usr/share/wordlists/rockyou.txt"]
+
+    def _build_crack_cmd(self, tool, filepath, hash_format=None):
+        """Build a multi-wordlist crack command that tries all available wordlists."""
+        wordlists = self._get_wordlists()
+
+        if tool == "aircrack":
+            # Aircrack-ng only takes one wordlist, so combine them
+            if len(wordlists) > 1:
+                combined = "' -w '".join(wordlists)
+                return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
+            return f"sudo aircrack-ng -w '{wordlists[0]}' '{filepath}'"
+
+        elif tool == "john":
+            # John: run with each wordlist + rules for extra coverage
+            cmds = []
+            for wl in wordlists[:3]:  # Top 3 wordlists
+                fmt = f"--format={hash_format} " if hash_format else ""
+                cmds.append(f"john {fmt}--wordlist='{wl}' --rules=best64 '{filepath}'")
+            # Show results at end
+            fmt = f"--format={hash_format} " if hash_format else ""
+            cmds.append(f"john {fmt}--show '{filepath}'")
+            return " ; ".join(cmds)
+
+        elif tool == "hashcat":
+            # Hashcat: use rules + multiple wordlists
+            cmds = []
+            for wl in wordlists[:3]:
+                cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wl}' -r /usr/share/hashcat/rules/best64.rule --force 2>/dev/null")
+            # Also try combinator/brute force for short passwords
+            cmds.append(f"hashcat -m {hash_format} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' --increment --force 2>/dev/null")
+            cmds.append(f"hashcat -m {hash_format} '{filepath}' --show 2>/dev/null")
+            return " ; ".join(cmds)
+
+        return ""
+
     def _analyze_file(self, filepath):
         """Auto-detect file type and crack/analyze immediately — no popups."""
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
 
         if ext in ('.cap', '.pcap'):
-            # WiFi capture — auto crack with aircrack-ng
-            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname}...\n")
-            self._execute_command(f"sudo aircrack-ng -w /usr/share/wordlists/rockyou.txt '{filepath}'")
+            # WiFi capture — auto crack with all wordlists
+            wl_count = len(self._get_wordlists())
+            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {wl_count} wordlists...\n")
+            self._execute_command(self._build_crack_cmd("aircrack", filepath))
 
         elif ext in ('.hc22000', '.hccapx'):
-            # Hashcat WiFi format
-            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat...\n")
-            self._execute_command(f"hashcat -m 22000 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+            # Hashcat WiFi format — multi wordlist + rules + brute force
+            wl_count = len(self._get_wordlists())
+            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules + brute force)...\n")
+            self._execute_command(self._build_crack_cmd("hashcat", filepath, "22000"))
 
         elif ext in ('.txt', '.hash'):
             # Hash file — auto-detect hash type and crack
@@ -708,42 +788,35 @@ class MaximWindow(QMainWindow):
             hash_len = len(first_line.split(':')[0]) if ':' in first_line else len(first_line)
 
             # Auto-detect by hash length
+            wl_count = len(self._get_wordlists())
+
             if hash_len == 32:
-                # MD5
-                self.terminal.appendPlainText(f"Detected: MD5 (32 chars)\n")
-                self._execute_command(f"john --format=Raw-MD5 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-MD5 --show '{filepath}'")
+                self.terminal.appendPlainText(f"Detected: MD5 (32 chars) — {wl_count} wordlists + rules\n")
+                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-MD5"))
             elif hash_len == 40:
-                # SHA1
-                self.terminal.appendPlainText(f"Detected: SHA1 (40 chars)\n")
-                self._execute_command(f"john --format=Raw-SHA1 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA1 --show '{filepath}'")
+                self.terminal.appendPlainText(f"Detected: SHA1 (40 chars) — {wl_count} wordlists + rules\n")
+                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA1"))
             elif hash_len == 64:
-                # SHA256
-                self.terminal.appendPlainText(f"Detected: SHA256 (64 chars)\n")
-                self._execute_command(f"john --format=Raw-SHA256 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA256 --show '{filepath}'")
+                self.terminal.appendPlainText(f"Detected: SHA256 (64 chars) — {wl_count} wordlists + rules\n")
+                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA256"))
             elif hash_len == 128:
-                # SHA512
-                self.terminal.appendPlainText(f"Detected: SHA512 (128 chars)\n")
-                self._execute_command(f"john --format=Raw-SHA512 --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --format=Raw-SHA512 --show '{filepath}'")
+                self.terminal.appendPlainText(f"Detected: SHA512 (128 chars) — {wl_count} wordlists + rules\n")
+                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA512"))
             elif first_line.startswith('$2') or first_line.startswith('$2b$'):
-                # bcrypt
-                self.terminal.appendPlainText(f"Detected: bcrypt\n")
-                self._execute_command(f"hashcat -m 3200 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+                self.terminal.appendPlainText(f"Detected: bcrypt — {wl_count} wordlists + rules + brute force\n")
+                self._execute_command(self._build_crack_cmd("hashcat", filepath, "3200"))
             elif first_line.startswith('$6$'):
-                # SHA512crypt
-                self.terminal.appendPlainText(f"Detected: SHA512crypt\n")
-                self._execute_command(f"hashcat -m 1800 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+                self.terminal.appendPlainText(f"Detected: SHA512crypt — {wl_count} wordlists + rules + brute force\n")
+                self._execute_command(self._build_crack_cmd("hashcat", filepath, "1800"))
             elif first_line.startswith('$5$'):
-                # SHA256crypt
-                self.terminal.appendPlainText(f"Detected: SHA256crypt\n")
-                self._execute_command(f"hashcat -m 7400 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+                self.terminal.appendPlainText(f"Detected: SHA256crypt — {wl_count} wordlists + rules + brute force\n")
+                self._execute_command(self._build_crack_cmd("hashcat", filepath, "7400"))
             elif first_line.startswith('$1$'):
-                # MD5crypt
-                self.terminal.appendPlainText(f"Detected: MD5crypt\n")
-                self._execute_command(f"hashcat -m 500 '{filepath}' /usr/share/wordlists/rockyou.txt --force")
+                self.terminal.appendPlainText(f"Detected: MD5crypt — {wl_count} wordlists + rules + brute force\n")
+                self._execute_command(self._build_crack_cmd("hashcat", filepath, "500"))
             else:
-                # Unknown — let john auto-detect
-                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
-                self._execute_command(f"john --wordlist=/usr/share/wordlists/rockyou.txt '{filepath}' && john --show '{filepath}'")
+                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying all methods\n")
+                self._execute_command(self._build_crack_cmd("john", filepath))
 
         elif ext in ('.csv', '.xml'):
             # Scan results
