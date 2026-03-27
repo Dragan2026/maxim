@@ -231,19 +231,12 @@ class MaximWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
 
-        self.tabs.addWidget(self._build_prompt_tab())       # 0: Command Center
-        self.tabs.addWidget(self._build_workflow_tab())      # 1: Workflows
-        self.tabs.addWidget(self._build_tools_tab())         # 2: Tools
-        self.tabs.addWidget(self._build_ai_tab())            # 3: AI Assistant
-        self.tabs.addWidget(self._build_online_tab())        # 4: Online Tools
-        self.tabs.addWidget(self._build_log_tab())           # 5: Session Log
-
-        self.tabs.setTabText(0, "  Command Center  ")
-        self.tabs.setTabText(1, "  Workflows  ")
-        self.tabs.setTabText(2, "  Tools  ")
-        self.tabs.setTabText(3, "  AI Assistant  ")
-        self.tabs.setTabText(4, "  Online  ")
-        self.tabs.setTabText(5, "  Log  ")
+        self.tabs.addTab(self._build_prompt_tab(), "  Command Center  ")
+        self.tabs.addTab(self._build_workflow_tab(), "  Workflows  ")
+        self.tabs.addTab(self._build_tools_tab(), "  Tools  ")
+        self.tabs.addTab(self._build_ai_tab(), "  AI Assistant  ")
+        self.tabs.addTab(self._build_online_tab(), "  Online  ")
+        self.tabs.addTab(self._build_log_tab(), "  Log  ")
 
         body.addWidget(self.tabs)
         body.setSizes([240, 1040])
