@@ -74,6 +74,10 @@ class ProcessRunner:
     def __init__(self):
         self.active_processes = {}  # pid -> Popen
         self.lock = threading.Lock()
+        self._sudo_password = None
+
+    def set_sudo_password(self, password):
+        self._sudo_password = password
 
     def run(self, cmd: str, as_root: bool = False, callback=None, env=None):
         """
@@ -82,6 +86,14 @@ class ProcessRunner:
         """
         if as_root and os.geteuid() != 0:
             cmd = f"sudo {cmd}"
+
+        # Auto-supply sudo password via -S if cmd uses sudo
+        sudo_password = self._sudo_password
+        needs_sudo_pipe = "sudo " in cmd and sudo_password
+
+        if needs_sudo_pipe:
+            # Replace plain sudo with sudo -S so it reads password from stdin
+            cmd = cmd.replace("sudo ", "sudo -S ", 1)
 
         merged_env = os.environ.copy()
         if env:
@@ -95,11 +107,21 @@ class ProcessRunner:
                 cmd, shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE if needs_sudo_pipe else None,
                 env=merged_env,
                 preexec_fn=os.setsid,
                 bufsize=1,
                 universal_newlines=True,
             )
+
+            # Feed password to sudo -S
+            if needs_sudo_pipe and proc.stdin:
+                try:
+                    proc.stdin.write(sudo_password + "\n")
+                    proc.stdin.flush()
+                    proc.stdin.close()
+                except Exception:
+                    pass
             with self.lock:
                 self.active_processes[proc.pid] = proc
 

@@ -80,6 +80,17 @@ class MaximWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._update_status()
+        self._ask_sudo_password()
+
+    def _ask_sudo_password(self):
+        """Ask for sudo password once at startup so commands can run with sudo."""
+        pwd, ok = QInputDialog.getText(
+            self, "Sudo Password",
+            "Enter your sudo password (needed to run privileged commands):",
+            QLineEdit.Password, ""
+        )
+        if ok and pwd:
+            self.runner.set_sudo_password(pwd)
 
     def _build_ui(self):
         central = QWidget()
