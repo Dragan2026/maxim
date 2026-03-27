@@ -508,22 +508,13 @@ class MaximWindow(QMainWindow):
     # ═══════════════════════════════════════
 
     def _fill_placeholders(self, cmd_template):
-        placeholders = re.findall(r'\{(\w+)\}', cmd_template)
+        defaults = {
+            "iface": "wlan0", "target": "192.168.1.1", "port": "4444",
+            "lhost": "0.0.0.0", "lport": "4444", "domain": "example.com",
+            "user": "admin", "wordlist": "/usr/share/wordlists/rockyou.txt",
+        }
         cmd = cmd_template
-        for ph in placeholders:
-            defaults = {
-                "iface": "wlan0", "target": "192.168.1.1", "port": "4444",
-                "lhost": "0.0.0.0", "lport": "4444", "domain": "example.com",
-                "user": "admin", "wordlist": "/usr/share/wordlists/rockyou.txt",
-            }
-            val, ok = QInputDialog.getText(
-                self, f"Enter: {ph}",
-                f"Value for {{{ph}}}:",
-                QLineEdit.Normal,
-                defaults.get(ph, "")
-            )
-            if not ok:
-                return None
+        for ph, val in defaults.items():
             cmd = cmd.replace(f"{{{ph}}}", val)
         return cmd
 
