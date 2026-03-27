@@ -603,55 +603,49 @@ class MaximWindow(QMainWindow):
         )
         self.current_thread.start()
 
-    # Patterns that indicate a cracked password in output
-    CRACK_PATTERNS = [
-        re.compile(r'KEY FOUND!\s*\[.*\]', re.IGNORECASE),          # aircrack-ng
-        re.compile(r'^.+:.+$'),                                       # john/hashcat hash:password
-        re.compile(r'Session\.Name.*:.*Recovered', re.IGNORECASE),   # hashcat status
-        re.compile(r'Cracked', re.IGNORECASE),                        # generic
-        re.compile(r'\d+ password hash(es)? cracked', re.IGNORECASE), # john summary
-    ]
-
-    def _is_cracked_line(self, line):
-        """Check if line contains a cracked password result."""
+    def _extract_password(self, line):
+        """Extract the actual cracked password from tool output. Returns password or None."""
         stripped = line.strip()
         if not stripped:
-            return False
-        # aircrack-ng
-        if 'KEY FOUND!' in stripped:
-            return True
-        # john --show format: "hash:password" or "username:password"
-        # hashcat format: "hash:password"
-        if re.match(r'^[a-fA-F0-9]{16,}:.+$', stripped):
-            return True
-        # john cracked count
-        if re.search(r'\d+ password hash(es)? cracked', stripped, re.IGNORECASE):
-            return True
-        # hashcat recovered
-        if 'Recovered' in stripped and ('/' in stripped):
-            return True
-        # Generic
-        if 'cracked' in stripped.lower() and 'password' in stripped.lower():
-            return True
-        return False
+            return None
+
+        # aircrack-ng: "KEY FOUND! [ mysecretpassword ]"
+        m = re.search(r'KEY FOUND!\s*\[\s*(.+?)\s*\]', stripped)
+        if m:
+            return m.group(1)
+
+        # john --show / hashcat: "hash:password" (hash is hex 16+ chars)
+        m = re.match(r'^[a-fA-F0-9]{16,}:(.+)$', stripped)
+        if m:
+            return m.group(1)
+
+        # john --show with username: "user:password" after --show command
+        # hashcat with $format$: "$hash$:password"
+        m = re.match(r'^\$[^:]+\$[^:]*:(.+)$', stripped)
+        if m:
+            return m.group(1)
+
+        return None
 
     def _on_output_line(self, line):
         self.terminal.moveCursor(QTextCursor.End)
-        if self._is_cracked_line(line):
-            # Highlight cracked password in bright yellow/green
+        password = self._extract_password(line)
+        if password:
+            # Print the normal line first
+            self.terminal.insertPlainText(line)
+            # Then highlight just the password
             cursor = self.terminal.textCursor()
             fmt = cursor.charFormat()
             highlight_fmt = QTextCharFormat()
             highlight_fmt.setForeground(QColor("#000000"))
             highlight_fmt.setBackground(QColor("#4ade80"))
             highlight_fmt.setFontWeight(QFont.Bold)
-            cursor.insertText(f" CRACKED >> {line.strip()} << \n", highlight_fmt)
-            # Reset format
+            highlight_fmt.setFontPointSize(18)
+            cursor.insertText(f"\n  PASSWORD: {password} \n\n", highlight_fmt)
             cursor.setCharFormat(fmt)
             self.terminal.setTextCursor(cursor)
         else:
             self.terminal.insertPlainText(line)
-        # Always scroll to bottom to show latest output
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
