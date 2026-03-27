@@ -98,7 +98,7 @@ PROVIDERS = {
 #  CONFIG MANAGEMENT
 # ═══════════════════════════════════════════════════
 
-GROQ_KEY_PARTS = ["gsk_wKsKUifsCEWl2ey", "S3uykWGdyb3FYW41r", "8aL2EtiVULf8rFH2i5TJ"]
+GROQ_KEY_PARTS = ["gsk_GuXQ1WqQKLRcWVtm", "9urBWGdyb3FYDzZYY", "QbWSl8MNgxdCErhWSER"]
 BUILTIN_GROQ_KEY = "".join(GROQ_KEY_PARTS)
 
 def load_config() -> dict:
