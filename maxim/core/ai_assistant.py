@@ -451,16 +451,25 @@ class AIManager:
 
     def __init__(self):
         self.config = load_config()
-        self.ollama = OllamaAI(self.config.get("model", "mistral"))
+        self.ollama = None  # Don't init Ollama by default — waste of time
         self.online = None
-        self.active_provider = self.config.get("provider", "ollama")
+        self.active_provider = self.config.get("provider", "groq")
 
-        # Initialize online provider if configured
+        # Always prefer online provider (Groq)
         if self.active_provider != "ollama":
             self.online = OnlineAI(
                 self.active_provider,
-                self.config.get("model")
+                self.config.get("model", "llama-3.1-8b-instant")
             )
+            # If no key configured, try Groq with saved key
+            if not self.online.is_available() and self.active_provider != "groq":
+                groq_key = get_api_key("groq")
+                if groq_key:
+                    self.active_provider = "groq"
+                    self.online = OnlineAI("groq", "llama-3.1-8b-instant")
+        else:
+            # User explicitly chose Ollama
+            self.ollama = OllamaAI(self.config.get("model", "mistral"))
 
     @property
     def provider_name(self) -> str:
@@ -474,16 +483,15 @@ class AIManager:
     def is_available(self) -> bool:
         """Active provider available, OR any fallback available."""
         if self.active_provider == "ollama":
-            if self.ollama.is_available():
+            if self.ollama and self.ollama.is_available():
                 return True
         elif self.online and self.online.is_available():
             return True
-        # Check fallbacks
         return self.is_any_available()
 
     def get_status(self) -> str:
         if self.active_provider == "ollama":
-            if self.ollama.is_available():
+            if self.ollama and self.ollama.is_available():
                 return f"Ollama: Online ({self.ollama.model})"
             return "Ollama: Offline"
         if self.online and self.online.is_available():
@@ -494,9 +502,12 @@ class AIManager:
         """Switch to a different AI provider."""
         self.active_provider = provider_id
         if provider_id == "ollama":
-            self.ollama._check_availability()
-            if model:
-                self.ollama.model = model
+            if not self.ollama:
+                self.ollama = OllamaAI(model or "mistral")
+            else:
+                self.ollama._check_availability()
+                if model:
+                    self.ollama.model = model
         else:
             self.online = OnlineAI(provider_id, model)
 
@@ -512,14 +523,14 @@ class AIManager:
             self.online.api_key = key
 
     def get_models(self) -> list:
-        if self.active_provider == "ollama":
+        if self.active_provider == "ollama" and self.ollama:
             installed = self.ollama.get_installed_models()
             return installed if installed else PROVIDERS["ollama"]["models"]
         return PROVIDERS.get(self.active_provider, {}).get("models", [])
 
     def is_any_available(self) -> bool:
         """Check if ANY provider (active or fallback) is available."""
-        if self.ollama.is_available():
+        if self.ollama and self.ollama.is_available():
             return True
         # Check all configured online providers
         for pid in PROVIDERS:
@@ -540,12 +551,25 @@ class AIManager:
         Send message to active AI. If it fails or is unavailable,
         automatically fall back: Ollama -> online, or online -> Ollama.
         """
-        # Try active provider first
-        if self.active_provider == "ollama" and self.ollama.is_available():
+        # Try active provider first (Groq by default)
+        if self.active_provider != "ollama" and self.online and self.online.is_available():
+            try:
+                result = self.online.chat(user_message, stream_callback)
+                if not result.startswith("[AI Error]"):
+                    return result
+            except Exception as e:
+                result = f"[AI Error] {e}"
+            # Online failed — try Ollama fallback
+            if self.ollama and self.ollama.is_available():
+                if stream_callback:
+                    stream_callback("\n[Falling back to Ollama...]\n")
+                return self.ollama.chat(user_message, stream_callback)
+            return result
+
+        if self.active_provider == "ollama" and self.ollama and self.ollama.is_available():
             result = self.ollama.chat(user_message, stream_callback)
             if not result.startswith("[AI Error]"):
                 return result
-            # Ollama failed — try online fallback
             fallback = self._get_fallback_provider()
             if fallback:
                 if stream_callback:
@@ -553,37 +577,19 @@ class AIManager:
                 return fallback.chat(user_message, stream_callback)
             return result
 
-        if self.active_provider != "ollama" and self.online and self.online.is_available():
-            try:
-                result = self.online.chat(user_message, stream_callback)
-                if not result.startswith("[AI Error]"):
-                    return result
-                # Online returned error — try Ollama fallback
-                if self.ollama.is_available():
-                    if stream_callback:
-                        stream_callback("\n[Online AI failed, falling back to Ollama...]\n")
-                    return self.ollama.chat(user_message, stream_callback)
-                return result
-            except Exception as e:
-                # Online exception — try Ollama fallback
-                if self.ollama.is_available():
-                    if stream_callback:
-                        stream_callback("\n[Online AI failed, falling back to Ollama...]\n")
-                    return self.ollama.chat(user_message, stream_callback)
-                return f"[AI Error] {e}"
-
         # Neither active provider works — try any available
-        if self.ollama.is_available():
-            return self.ollama.chat(user_message, stream_callback)
-
         fallback = self._get_fallback_provider()
         if fallback:
             return fallback.chat(user_message, stream_callback)
 
-        return "[Error] No AI provider available. Set up Ollama (offline) or add an API key (online) in the AI tab."
+        if self.ollama and self.ollama.is_available():
+            return self.ollama.chat(user_message, stream_callback)
+
+        return "[Error] No AI provider available. Add your Groq API key in AI menu > Set API Key."
 
     def clear_context(self):
-        self.ollama.clear_context()
+        if self.ollama:
+            self.ollama.clear_context()
         if self.online:
             self.online.clear_context()
 

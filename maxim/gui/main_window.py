@@ -396,7 +396,7 @@ class MaximWindow(QMainWindow):
         self.prompt_input.clear()
         q_lower = query.lower().strip()
 
-        # 1. Raw command
+        # 1. Raw command (starts with a known tool binary)
         raw_prefixes = (
             "sudo ", "nmap ", "airmon-ng", "airodump", "aireplay",
             "aircrack", "wifite", "msfconsole", "sqlmap ", "hydra ",
@@ -416,73 +416,70 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
-        # 2. NATURAL_COMMANDS
-        for phrase, (tool, cmd, desc) in NATURAL_COMMANDS.items():
-            if phrase in q_lower:
-                cmd_filled = self._fill_placeholders(cmd, query)
-                if cmd_filled:
-                    tool_obj = get_tool_by_name(tool)
-                    needs_root = tool_obj.get("needs_root", False) if tool_obj else False
-                    self._execute_command(cmd_filled, as_root=needs_root)
-                return
-
-        # 3. SmartRouter
-        route = SmartRouter.route(query)
-        if route["direct_command"]:
-            self._execute_command(route["direct_command"])
-            return
-        if route["tools"]:
-            tool = route["tools"][0]
-            if tool.get("common_commands"):
-                best_cmd = tool["common_commands"][0]["cmd"]
-                needs_root = tool.get("needs_root", False)
-                cmd_filled = self._fill_placeholders(best_cmd, query)
-                if cmd_filled:
-                    self._execute_command(cmd_filled, as_root=needs_root)
-            else:
-                self._execute_command(f"{tool['name']} --help")
-            return
-
-        # 4. AI
+        # 2. Everything else → AI decides what to do
         if self.ai and self.ai.is_available():
             self._ai_execute(query)
         else:
-            self.terminal.appendPlainText(
-                f"\n[!] Don't know how to: {query}\n"
-                f"    Try typing the command directly, or set up AI (AI menu > Set API Key).\n"
-            )
+            # Fallback: try SmartRouter if AI is not available
+            route = SmartRouter.route(query)
+            if route["direct_command"]:
+                self._execute_command(route["direct_command"])
+            elif route["tools"]:
+                tool = route["tools"][0]
+                if tool.get("common_commands"):
+                    best_cmd = tool["common_commands"][0]["cmd"]
+                    cmd_filled = self._fill_placeholders(best_cmd, query)
+                    if cmd_filled:
+                        self._execute_command(cmd_filled, as_root=tool.get("needs_root", False))
+                else:
+                    self._execute_command(f"{tool['name']} --help")
+            else:
+                self.terminal.appendPlainText(
+                    f"\n[!] Don't know how to: {query}\n"
+                    f"    Set up AI: AI menu > Set API Key.\n"
+                )
 
     def _ai_execute(self, query):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
-        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...")
+        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
 
         enhanced_query = (
             f"The user wants to: {query}\n\n"
             f"Give me the EXACT terminal command(s) to run on Kali Linux. "
             f"Put each command on its own line starting with $ sign. "
             f"Be brief — command first, short explanation after. "
-            f"Pick the best tool, don't list alternatives."
+            f"Pick the best tool, don't list alternatives. "
+            f"If it's a scan, use nmap by default."
         )
 
         thread = AIStreamSignal(self.ai, enhanced_query)
 
+        def on_token(token):
+            self.terminal.moveCursor(QTextCursor.End)
+            self.terminal.insertPlainText(token)
+            self.terminal.moveCursor(QTextCursor.End)
+
         def on_done(response):
             self._set_running(False)
+            if response.startswith("[Error]") or response.startswith("[AI Error]"):
+                self.terminal.appendPlainText(f"\n{response}\n")
+                return
+
+            # Extract and auto-run commands
             commands = []
             for line in response.split("\n"):
                 line = line.strip()
                 if line.startswith("$ "):
                     commands.append(line[2:])
-                elif re.match(r'^(sudo |nmap |airmon|airodump|hydra |sqlmap |nikto )', line):
+                elif re.match(r'^(sudo |nmap |airmon|airodump|hydra |sqlmap |nikto |gobuster |dirb |ffuf |masscan |whatweb |wpscan )', line):
                     commands.append(line)
-
-            self.terminal.appendPlainText(f"\n[AI] {response}\n")
 
             if commands:
                 cmd = commands[0].strip()
-                self.terminal.appendPlainText(f"\n[AI] Running: {cmd}\n")
+                self.terminal.appendPlainText(f"\n\n⚡ Auto-running: {cmd}\n")
                 self._execute_command(cmd)
 
+        thread.token_received.connect(on_token)
         thread.finished.connect(on_done)
         thread.start()
         self._ai_thread = thread
