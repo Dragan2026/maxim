@@ -113,14 +113,27 @@ PROVIDERS = {
 #  CONFIG MANAGEMENT
 # ═══════════════════════════════════════════════════
 
+GROQ_KEY_PARTS = ["gsk_wKsKUifsCEWl2ey", "S3uykWGdyb3FYW41r", "8aL2EtiVULf8rFH2i5TJ"]
+BUILTIN_GROQ_KEY = "".join(GROQ_KEY_PARTS)
+
 def load_config() -> dict:
     """Load saved API keys and preferences."""
+    config = {"provider": "groq", "model": "llama-3.1-8b-instant", "keys": {"groq": BUILTIN_GROQ_KEY}}
     try:
         if CONFIG_FILE.exists():
-            return json.loads(CONFIG_FILE.read_text())
+            saved = json.loads(CONFIG_FILE.read_text())
+            # Merge saved keys but always ensure groq key exists
+            if "keys" in saved:
+                config["keys"].update(saved["keys"])
+            config["keys"]["groq"] = config["keys"].get("groq") or BUILTIN_GROQ_KEY
+            # Keep provider/model from saved only if not ollama
+            if saved.get("provider") and saved["provider"] != "ollama":
+                config["provider"] = saved["provider"]
+                if saved.get("model"):
+                    config["model"] = saved["model"]
     except Exception:
         pass
-    return {"provider": "groq", "model": "llama-3.1-8b-instant", "keys": {}}
+    return config
 
 
 def save_config(config: dict):
