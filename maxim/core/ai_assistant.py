@@ -582,10 +582,12 @@ class AIManager:
                     return result
             except Exception as e:
                 result = f"[AI Error] {e}"
-            # Online failed — try Ollama fallback
-            if self.ollama and self.ollama.is_available():
+            # Online failed (rate limit etc) — try Ollama fallback
+            if not self.ollama:
+                self.ollama = OllamaAI()
+            if self.ollama.is_available():
                 if stream_callback:
-                    stream_callback("\n[Falling back to Ollama...]\n")
+                    stream_callback("\n[Groq limit reached — switching to Ollama...]\n")
                 return self.ollama.chat(user_message, stream_callback)
             return result
 
