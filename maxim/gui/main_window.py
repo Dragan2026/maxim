@@ -668,45 +668,45 @@ class MaximWindow(QMainWindow):
     def _detect_monitor_name(self, iface):
         """Detect the actual monitor mode interface name after airmon-ng start."""
         try:
-            # Method 1: Check iw dev for monitor mode interfaces
-            code, out, _ = self.runner.run("iw dev")
-            current_iface = None
+            # Method 1: Check iwconfig — most reliable
+            # Look for interfaces in Monitor mode
+            code, out, _ = self.runner.run("iwconfig 2>/dev/null")
             monitor_ifaces = []
             for line in out.split('\n'):
+                if 'Mode:Monitor' in line or 'Mode: Monitor' in line:
+                    parts = line.split()
+                    if parts:
+                        monitor_ifaces.append(parts[0])
+
+            # Check if the adapter itself is in monitor mode (e.g. wlan1)
+            if iface in monitor_ifaces:
+                return iface
+            # Check for wlan1mon
+            if f"{iface}mon" in monitor_ifaces:
+                return f"{iface}mon"
+            # Any related monitor interface
+            for mi in monitor_ifaces:
+                if mi.startswith(iface):
+                    return mi
+            # Any monitor interface at all
+            if monitor_ifaces:
+                return monitor_ifaces[0]
+
+            # Method 2: Check iw dev
+            code, out2, _ = self.runner.run("iw dev")
+            current_iface = None
+            for line in out2.split('\n'):
                 line = line.strip()
                 if line.startswith("Interface "):
                     current_iface = line.split()[1]
                 if "type monitor" in line and current_iface:
-                    monitor_ifaces.append(current_iface)
+                    if current_iface == iface or current_iface.startswith(iface):
+                        return current_iface
 
-            # Prefer monitor interface related to our adapter
-            for mi in monitor_ifaces:
-                if mi == f"{iface}mon":
-                    return mi
-                if mi.startswith(iface):
-                    return mi
-            # Any monitor interface
-            if monitor_ifaces:
-                return monitor_ifaces[0]
-
-            # Method 2: Check if the adapter itself is in monitor mode
-            # Some drivers keep the same name (wlan1) when in monitor mode
-            if f"Interface {iface}" in out and "type monitor" in out:
-                return iface
-
-            # Method 3: Check iwconfig
-            code2, out2, _ = self.runner.run("iwconfig 2>/dev/null")
-            for line in out2.split('\n'):
-                if 'Mode:Monitor' in line:
-                    parts = line.split()
-                    if parts:
-                        mon = parts[0]
-                        if mon.startswith(iface) or 'mon' in mon:
-                            return mon
-
-            return f"{iface}mon"  # fallback
+            # Fallback: assume the adapter itself is in monitor mode
+            return iface
         except Exception:
-            return f"{iface}mon"
+            return iface
 
     def _replace_wifi_iface(self, cmd, iface, mon_name):
         """Replace wlan0/wlan0mon in command with the selected interfaces."""
@@ -733,20 +733,8 @@ class MaximWindow(QMainWindow):
             self.terminal.appendPlainText(out)
 
         # Step 3: Detect actual monitor interface name
-        # First try to parse it from airmon-ng output
-        mon_name = None
-        # airmon-ng prints: "monitor mode already enabled for [phy2]wlan1 on [phy2]wlan1mon"
-        # or: "mac80211 monitor mode vif enabled for [phy2]wlan1 on [phy2]wlan1mon"
-        m = re.search(r'on \[phy\d+\](\S+)', out)
-        if m:
-            mon_name = m.group(1)
-        if not mon_name:
-            # Also try: "(monitor mode enabled on wlan1mon)"
-            m = re.search(r'monitor mode (?:enabled|vif enabled) (?:on|for) (?:\[\w+\])?(\S+)', out)
-            if m:
-                mon_name = m.group(1)
-        if not mon_name:
-            mon_name = self._detect_monitor_name(iface)
+        # Use iw dev / iwconfig to find which interface is actually in monitor mode
+        mon_name = self._detect_monitor_name(iface)
 
         # Step 4: Restart NetworkManager so the other adapter reconnects
         if keep_iface:
