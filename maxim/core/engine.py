@@ -4,9 +4,11 @@ Maxim Core Engine — handles subprocess execution, logging, session management.
 
 import subprocess
 import os
+import re
 import json
 import time
 import signal
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,20 @@ from pathlib import Path
 DATA_DIR = Path.home() / ".maxim"
 LOG_DIR = DATA_DIR / "logs"
 SESSIONS_DIR = DATA_DIR / "sessions"
+
+# ANSI escape code regex
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\(B')
+
+# Tools that MUST run in a real terminal (interactive/TUI tools)
+TERMINAL_TOOLS = {
+    "wifite", "msfconsole", "bettercap", "ettercap", "wireshark",
+    "burpsuite", "zenmap", "maltego", "armitage",
+}
+
+
+def strip_ansi(text):
+    """Remove ANSI escape codes from text."""
+    return ANSI_RE.sub('', text)
 
 
 def ensure_dirs():
@@ -23,6 +39,14 @@ def ensure_dirs():
 
 
 ensure_dirs()
+
+
+def _find_terminal():
+    """Find available terminal emulator."""
+    for term in ["qterminal", "xfce4-terminal", "gnome-terminal", "konsole", "xterm"]:
+        if shutil.which(term):
+            return term
+    return "xterm"
 
 
 class Session:
@@ -79,21 +103,61 @@ class ProcessRunner:
     def set_sudo_password(self, password):
         self._sudo_password = password
 
+    def needs_external_terminal(self, cmd):
+        """Check if command needs a real terminal (interactive/TUI tools)."""
+        first_word = cmd.strip().split()[0].split("/")[-1]
+        # Strip sudo prefix
+        words = cmd.strip().split()
+        tool = words[0]
+        if tool == "sudo" and len(words) > 1:
+            tool = words[1]
+            if tool == "-S" and len(words) > 2:
+                tool = words[2]
+        return tool in TERMINAL_TOOLS
+
+    def run_in_terminal(self, cmd):
+        """Launch command in an external terminal window."""
+        term = _find_terminal()
+        sudo_pw = self._sudo_password
+
+        # Wrap command: pipe sudo password if needed
+        if sudo_pw and "sudo " in cmd:
+            # Use echo to pipe password, then keep terminal open
+            wrapped = f"echo '{sudo_pw}' | sudo -S {cmd.replace('sudo ', '', 1)}; echo; echo '[Done] Press Enter to close'; read"
+        else:
+            wrapped = f"{cmd}; echo; echo '[Done] Press Enter to close'; read"
+
+        if term == "gnome-terminal":
+            launch = f'{term} -- bash -c "{wrapped}"'
+        elif term in ("qterminal", "xfce4-terminal", "konsole"):
+            launch = f'{term} -e bash -c "{wrapped}"'
+        else:
+            launch = f'xterm -e bash -c "{wrapped}"'
+
+        subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
+
     def run(self, cmd: str, as_root: bool = False, callback=None, env=None):
         """
-        Run a command. Returns (exit_code, output).
+        Run a command. Returns (exit_code, output, duration).
         callback(line) is called for each output line in real time.
         """
         if as_root and os.geteuid() != 0:
             cmd = f"sudo {cmd}"
+
+        # Check if this needs an external terminal
+        if self.needs_external_terminal(cmd):
+            self.run_in_terminal(cmd)
+            if callback:
+                callback(f"[Opened in external terminal]\n")
+            return 0, "[Opened in external terminal]\n", 0.0
 
         # Auto-supply sudo password via -S if cmd uses sudo
         sudo_password = self._sudo_password
         needs_sudo_pipe = "sudo " in cmd and sudo_password
 
         if needs_sudo_pipe:
-            # Replace plain sudo with sudo -S so it reads password from stdin
-            cmd = cmd.replace("sudo ", "sudo -S ", 1)
+            # Pipe password via echo instead of replacing sudo
+            cmd = f"echo '{sudo_password}' | sudo -S {cmd.replace('sudo ', '', 1)}"
 
         merged_env = os.environ.copy()
         if env:
@@ -107,28 +171,19 @@ class ProcessRunner:
                 cmd, shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE if needs_sudo_pipe else None,
                 env=merged_env,
                 preexec_fn=os.setsid,
                 bufsize=1,
                 universal_newlines=True,
             )
-
-            # Feed password to sudo -S
-            if needs_sudo_pipe and proc.stdin:
-                try:
-                    proc.stdin.write(sudo_password + "\n")
-                    proc.stdin.flush()
-                    proc.stdin.close()
-                except Exception:
-                    pass
             with self.lock:
                 self.active_processes[proc.pid] = proc
 
             for line in iter(proc.stdout.readline, ""):
-                output_lines.append(line)
+                clean = strip_ansi(line)
+                output_lines.append(clean)
                 if callback:
-                    callback(line)
+                    callback(clean)
 
             proc.wait()
             exit_code = proc.returncode
