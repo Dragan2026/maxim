@@ -43,23 +43,77 @@ Restore MAC: sudo macchanger -p wlan0
 Scan WiFi with bettercap: sudo bettercap -iface wlan0mon
 Create evil twin: sudo airbase-ng -a {bssid} --essid "{ssid}" -c {channel} wlan0mon
 
+=== VULNERABILITY SCANNING ===
+Full vuln scan (nmap): nmap -sV --script=vuln {target}
+Nmap all vuln scripts: nmap -sV --script=vuln,exploit,auth {target}
+Nmap specific CVE check: nmap --script=http-vuln-* {target}
+Nmap SMB vulns: nmap --script=smb-vuln* -p 445 {target}
+Nmap SSL vulns: nmap --script=ssl-heartbleed,ssl-poodle,ssl-ccs-injection -p 443 {target}
+Nmap HTTP vulns: nmap --script=http-vuln-cve2017-5638,http-vuln-cve2014-3704,http-shellshock -p 80,443,8080 {target}
+Nmap FTP vulns: nmap --script=ftp-vsftpd-backdoor,ftp-proftpd-backdoor -p 21 {target}
+Nmap DNS vulns: nmap --script=dns-zone-transfer,dns-recursion -p 53 {target}
+OpenVAS scan: sudo gvm-start && gvm-cli socket --xml '<create_task><name>Scan</name><target><hosts>{target}</hosts></target></create_task>'
+Nikto web vuln scan: nikto -h {url} -output nikto_report.html -Format html
+Nikto with tuning: nikto -h {url} -Tuning 123bde
+Nikto SSL: nikto -h {url} -ssl
+Vulnerability scan target: nmap -sV --script=vuln -oN vuln_report.txt {target}
+Vuln scan all ports: nmap -sV -p- --script=vuln {target}
+Check for EternalBlue: nmap --script=smb-vuln-ms17-010 -p 445 {target}
+Check for BlueKeep: nmap --script=rdp-vuln-ms12-020 -p 3389 {target}
+Check Log4Shell: nmap --script=http-log4shell -p 80,443,8080 {target}
+Scan for default creds: nmap --script=http-default-accounts -p 80,443,8080 {target}
+Scan for shellshock: nmap --script=http-shellshock --script-args uri=/cgi-bin/test -p 80 {target}
+
 === WEB APPLICATION TESTING ===
 Scan website: nikto -h {url}
+Full web recon: whatweb -a 3 {url} && nikto -h {url} && gobuster dir -u {url} -w /usr/share/wordlists/dirb/common.txt
 Directory bruteforce: gobuster dir -u {url} -w /usr/share/wordlists/dirb/common.txt
-Directory with extensions: gobuster dir -u {url} -w /usr/share/wordlists/dirb/common.txt -x php,html,txt
+Directory with extensions: gobuster dir -u {url} -w /usr/share/wordlists/dirb/common.txt -x php,html,txt,bak,old,zip
+Big wordlist dir scan: gobuster dir -u {url} -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt -t 50
 FFUF fuzzing: ffuf -u {url}/FUZZ -w /usr/share/wordlists/dirb/common.txt
-Subdomain enum: ffuf -u http://FUZZ.{domain} -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt
+FFUF with extensions: ffuf -u {url}/FUZZ -w /usr/share/wordlists/dirb/common.txt -e .php,.html,.txt,.bak
+FFUF filter by size: ffuf -u {url}/FUZZ -w /usr/share/wordlists/dirb/common.txt -fs 0
+FFUF POST fuzzing: ffuf -u {url} -w /usr/share/wordlists/dirb/common.txt -X POST -d "user=FUZZ&pass=test" -fc 401
+Subdomain enum: ffuf -u http://FUZZ.{domain} -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fc 301,302
+Subdomain with amass: amass enum -d {domain}
+Subdomain with sublist3r: sublist3r -d {domain}
 SQL injection test: sqlmap -u "{url}?id=1" --batch --dbs
 SQL injection POST: sqlmap -u "{url}" --data="user=admin&pass=test" --batch --dbs
 SQL injection cookie: sqlmap -u "{url}" --cookie="PHPSESSID=abc123" --batch --dbs
+SQL injection auto forms: sqlmap -u "{url}" --forms --batch --dbs
+SQL injection with tamper: sqlmap -u "{url}?id=1" --batch --dbs --tamper=space2comment
 Dump database: sqlmap -u "{url}?id=1" --batch -D {dbname} --dump
+SQL injection OS shell: sqlmap -u "{url}?id=1" --batch --os-shell
 XSS scan: dalfox url "{url}?q=test"
+XSS scan with params: dalfox url "{url}" -p id,name,search
 WordPress scan: wpscan --url {url} --enumerate vp,vt,u
+WordPress full enum: wpscan --url {url} --enumerate vp,vt,u,tt,cb,dbe --plugins-detection aggressive
 WordPress brute: wpscan --url {url} -U admin -P /usr/share/wordlists/rockyou.txt
+Joomla scan: joomscan -u {url}
+Drupal scan: droopescan scan drupal -u {url}
 CMS detection: whatweb {url}
 SSL scan: sslscan {target}
+SSL detailed: testssl.sh {url}
 Web tech detection: whatweb -a 3 {url}
 WAF detection: wafw00f {url}
+HTTP methods test: nmap --script=http-methods -p 80,443 {target}
+Crawl website: gospider -s {url} -o output -c 10 -d 3
+Screenshot website: cutycapt --url={url} --out=screenshot.png
+API fuzzing: ffuf -u {url}/api/FUZZ -w /usr/share/wordlists/dirb/common.txt
+LFI test: ffuf -u "{url}?file=FUZZ" -w /usr/share/seclists/Fuzzing/LFI/LFI-Jhaddix.txt -fc 404
+SSRF test: ffuf -u "{url}?url=FUZZ" -w /usr/share/seclists/Fuzzing/SSRF/SSRF-Jhaddix.txt -fc 404
+Open redirect: ffuf -u "{url}?redirect=FUZZ" -w /usr/share/seclists/Fuzzing/open-redirect-payloads.txt -fc 404
+Nuclei scan: nuclei -u {url} -t cves/ -o nuclei_results.txt
+Nuclei all templates: nuclei -u {url} -severity critical,high,medium -o nuclei_results.txt
+Nuclei target list: nuclei -l targets.txt -severity critical,high -o nuclei_results.txt
+
+=== VULNERABILITY DATABASES / SEARCH ===
+Search exploits: searchsploit {query}
+Search exploits detailed: searchsploit -v {query}
+Copy exploit locally: searchsploit -m {exploit_id}
+Examine exploit: searchsploit -x {exploit_id}
+Search CVE with nmap: nmap -sV --script=vulscan/vulscan.nse {target}
+Update searchsploit: searchsploit -u
 
 === PASSWORD CRACKING ===
 Crack hash with john: john --wordlist=/usr/share/wordlists/rockyou.txt {hashfile}
@@ -151,4 +205,13 @@ Kill process: kill -9 {pid}
 Find files: find / -name "{filename}" 2>/dev/null
 Check connections: ss -tulnp
 Download file: wget {url} -O {output}
+
+=== FULL VULNERABILITY ASSESSMENT WORKFLOWS ===
+Quick vuln test website: whatweb -a 3 {url} && nikto -h {url} && nmap -sV --script=vuln {target}
+Full vuln test target: nmap -sV -sC -O -A -p- {target} -oN full_scan.txt && nmap --script=vuln {target} -oN vuln_scan.txt
+Web app full test: whatweb {url} && wafw00f {url} && nikto -h {url} && gobuster dir -u {url} -w /usr/share/wordlists/dirb/common.txt -x php,html,txt && sqlmap -u "{url}" --forms --batch --dbs
+WordPress full test: wpscan --url {url} --enumerate vp,vt,u,tt,cb,dbe --plugins-detection aggressive
+Network full assessment: sudo nmap -sn {subnet} -oN hosts.txt && nmap -sV -sC -iL hosts.txt --script=vuln -oN network_vuln.txt
+SMB full test: enum4linux -a {target} && nmap --script=smb-vuln* -p 445 {target} && smbclient -L //{target} -N
+SSL full test: sslscan {target} && nmap --script=ssl-heartbleed,ssl-poodle,ssl-ccs-injection -p 443 {target}
 """
