@@ -382,7 +382,7 @@ class MaximWindow(QMainWindow):
             "enum4linux", "smbclient", "crackmapexec", "gobuster",
             "masscan ", "netdiscover", "tor ", "proxychains",
             "ssh ", "socat ", "chisel ", "cat ", "grep ",
-            "find ", "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
+            "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
             "service ", "chmod ", "chown ", "mkdir ", "rm ", "cp ", "mv ",
         )
         if any(q_lower.startswith(p) for p in raw_prefixes):
@@ -535,6 +535,19 @@ class MaximWindow(QMainWindow):
             "port": "4444", "lhost": "0.0.0.0", "lport": "4444",
             "domain": extracted or "example.com",
             "user": "admin", "wordlist": "/usr/share/wordlists/rockyou.txt",
+            "hashfile": "hashes.txt", "hash_file": "hashes.txt",
+            "query": "apache", "bssid": "FF:FF:FF:FF:FF:FF",
+            "min": "8", "max": "12", "charset": "abcdefghijklmnopqrstuvwxyz0123456789",
+            "file": "target_file", "image": "/dev/sda1", "dump": "memory.dmp",
+            "subnet": "192.168.1.0/24", "url": extracted or "http://192.168.1.1",
+            "cap_file": "capture.cap", "channel": "6",
+            "module": "exploit/multi/handler", "payload": "linux/x64/meterpreter/reverse_tcp",
+            "format": "elf", "id": "1", "pass": "password",
+            "mode": "0", "path": "/login", "params": "user=admin&pass=^PASS^",
+            "fail_string": "Invalid", "gateway": "192.168.1.1",
+            "binary": "target_binary", "command": "nmap -sV 192.168.1.1",
+            "name": "session1", "rhost": "127.0.0.1", "rport": "8080",
+            "data": "key=value", "server": "192.168.1.1",
         }
         cmd = cmd_template
         for ph, val in defaults.items():
