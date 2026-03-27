@@ -30,6 +30,35 @@ from maxim.tools.tool_registry import (
 )
 
 
+class DropTerminal(QPlainTextEdit):
+    """Terminal that accepts drag & drop of files."""
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.setStyleSheet(self.styleSheet().replace("border: 1px solid #18181b", "border: 2px solid #3b82f6"))
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(self.styleSheet().replace("border: 2px solid #3b82f6", "border: 1px solid #18181b"))
+
+    def dropEvent(self, event):
+        self.setStyleSheet(self.styleSheet().replace("border: 2px solid #3b82f6", "border: 1px solid #18181b"))
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                filepath = url.toLocalFile()
+                if filepath:
+                    self.file_dropped.emit(filepath)
+                    break
+            event.acceptProposedAction()
+
+
 class OutputSignal(QThread):
     line_received = pyqtSignal(str)
     finished = pyqtSignal(int, float)
@@ -265,11 +294,12 @@ class MaximWindow(QMainWindow):
         term_header.setStyleSheet("color: #4ade80; font-size: 12px; font-weight: bold; letter-spacing: 4px;")
         tlay.addWidget(term_header)
 
-        self.terminal = QPlainTextEdit()
+        self.terminal = DropTerminal()
         self.terminal.setObjectName("terminal")
         self.terminal.setReadOnly(True)
+        self.terminal.file_dropped.connect(self._on_file_dropped)
         self.terminal.setFont(QFont("JetBrains Mono", 13))
-        self.terminal.setPlaceholderText("Output will appear here...")
+        self.terminal.setPlaceholderText("Output will appear here...\n\nDrag & drop .cap, .pcap, .hash, or .txt files here to crack them")
         self.terminal.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #000000; color: #4ade80;
@@ -570,8 +600,12 @@ class MaximWindow(QMainWindow):
         self.session.log_command(cmd, tool_name, exit_code, duration)
         self.cmd_count_label.setText(f"{len(self.session.commands)} commands")
 
+    def _on_file_dropped(self, filepath):
+        """Handle file dropped onto the terminal."""
+        self._analyze_file(filepath)
+
     def _load_file(self):
-        """Load a file (cap, pcap, hash, txt) and auto-analyze/crack it."""
+        """Load a file via file dialog."""
         filepath, _ = QFileDialog.getOpenFileName(
             self, "Load File for Analysis",
             os.path.expanduser("~"),
@@ -579,7 +613,10 @@ class MaximWindow(QMainWindow):
         )
         if not filepath:
             return
+        self._analyze_file(filepath)
 
+    def _analyze_file(self, filepath):
+        """Analyze a file — auto-detect type and offer actions."""
         ext = os.path.splitext(filepath)[1].lower()
         fname = os.path.basename(filepath)
 
