@@ -17,7 +17,6 @@ DATA_DIR = Path.home() / ".maxim"
 LOG_DIR = DATA_DIR / "logs"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
-# ANSI escape code regex
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\(B')
 
 # Tools that MUST run in a real terminal (interactive/TUI tools)
@@ -28,7 +27,6 @@ TERMINAL_TOOLS = {
 
 
 def strip_ansi(text):
-    """Remove ANSI escape codes from text."""
     return ANSI_RE.sub('', text)
 
 
@@ -42,7 +40,6 @@ ensure_dirs()
 
 
 def _find_terminal():
-    """Find available terminal emulator."""
     for term in ["qterminal", "xfce4-terminal", "gnome-terminal", "konsole", "xterm"]:
         if shutil.which(term):
             return term
@@ -50,16 +47,13 @@ def _find_terminal():
 
 
 class Session:
-    """Tracks a single Maxim usage session."""
-
     def __init__(self):
         self.id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.started = datetime.now().isoformat()
         self.commands = []
         self.file = SESSIONS_DIR / f"session_{self.id}.json"
 
-    def log_command(self, cmd: str, tool: str, exit_code: int, duration: float,
-                    output_snippet: str = ""):
+    def log_command(self, cmd, tool, exit_code, duration, output_snippet=""):
         entry = {
             "timestamp": datetime.now().isoformat(),
             "tool": tool,
@@ -85,47 +79,58 @@ class Session:
         sessions = []
         for f in files[:50]:
             try:
-                d = json.loads(f.read_text())
-                sessions.append(d)
+                sessions.append(json.loads(f.read_text()))
             except Exception:
                 pass
         return sessions
 
 
 class ProcessRunner:
-    """Runs commands as subprocesses with real-time output streaming."""
-
     def __init__(self):
-        self.active_processes = {}  # pid -> Popen
+        self.active_processes = {}
         self.lock = threading.Lock()
         self._sudo_password = None
+        self._sudo_cached = False
 
     def set_sudo_password(self, password):
         self._sudo_password = password
+        self._cache_sudo()
+
+    def _cache_sudo(self):
+        """Cache sudo credentials so all future sudo commands work without stdin pipe."""
+        if not self._sudo_password:
+            return False
+        try:
+            result = subprocess.run(
+                f"echo '{self._sudo_password}' | sudo -S -v",
+                shell=True, capture_output=True, text=True, timeout=5
+            )
+            self._sudo_cached = (result.returncode == 0)
+            return self._sudo_cached
+        except Exception:
+            return False
+
+    def _refresh_sudo(self):
+        """Refresh sudo cache before running a sudo command."""
+        if self._sudo_password:
+            subprocess.run(
+                f"echo '{self._sudo_password}' | sudo -S -v",
+                shell=True, capture_output=True, text=True, timeout=5
+            )
 
     def needs_external_terminal(self, cmd):
-        """Check if command needs a real terminal (interactive/TUI tools)."""
-        first_word = cmd.strip().split()[0].split("/")[-1]
-        # Strip sudo prefix
         words = cmd.strip().split()
         tool = words[0]
         if tool == "sudo" and len(words) > 1:
             tool = words[1]
-            if tool == "-S" and len(words) > 2:
-                tool = words[2]
         return tool in TERMINAL_TOOLS
 
     def run_in_terminal(self, cmd):
-        """Launch command in an external terminal window."""
         term = _find_terminal()
-        sudo_pw = self._sudo_password
+        # Refresh sudo cache so the terminal session has it
+        self._refresh_sudo()
 
-        # Wrap command: pipe sudo password if needed
-        if sudo_pw and "sudo " in cmd:
-            # Use echo to pipe password, then keep terminal open
-            wrapped = f"echo '{sudo_pw}' | sudo -S {cmd.replace('sudo ', '', 1)}; echo; echo '[Done] Press Enter to close'; read"
-        else:
-            wrapped = f"{cmd}; echo; echo '[Done] Press Enter to close'; read"
+        wrapped = f"{cmd}; echo; echo '[Done] Press Enter to close'; read"
 
         if term == "gnome-terminal":
             launch = f'{term} -- bash -c "{wrapped}"'
@@ -136,28 +141,20 @@ class ProcessRunner:
 
         subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
 
-    def run(self, cmd: str, as_root: bool = False, callback=None, env=None):
-        """
-        Run a command. Returns (exit_code, output, duration).
-        callback(line) is called for each output line in real time.
-        """
+    def run(self, cmd, as_root=False, callback=None, env=None):
         if as_root and os.geteuid() != 0:
             cmd = f"sudo {cmd}"
 
-        # Check if this needs an external terminal
+        # If interactive tool, open in real terminal
         if self.needs_external_terminal(cmd):
             self.run_in_terminal(cmd)
             if callback:
-                callback(f"[Opened in external terminal]\n")
+                callback("[Opened in external terminal]\n")
             return 0, "[Opened in external terminal]\n", 0.0
 
-        # Auto-supply sudo password via -S if cmd uses sudo
-        sudo_password = self._sudo_password
-        needs_sudo_pipe = "sudo " in cmd and sudo_password
-
-        if needs_sudo_pipe:
-            # Pipe password via echo instead of replacing sudo
-            cmd = f"echo '{sudo_password}' | sudo -S {cmd.replace('sudo ', '', 1)}"
+        # Refresh sudo cache before any sudo command (no stdin piping needed)
+        if "sudo " in cmd and self._sudo_password:
+            self._refresh_sudo()
 
         merged_env = os.environ.copy()
         if env:
@@ -181,6 +178,9 @@ class ProcessRunner:
 
             for line in iter(proc.stdout.readline, ""):
                 clean = strip_ansi(line)
+                # Filter out sudo password prompt
+                if clean.strip().startswith("[sudo] password for"):
+                    continue
                 output_lines.append(clean)
                 if callback:
                     callback(clean)
@@ -198,7 +198,7 @@ class ProcessRunner:
         output = "".join(output_lines)
         return exit_code, output, duration
 
-    def kill(self, pid: int):
+    def kill(self, pid):
         with self.lock:
             proc = self.active_processes.get(pid)
             if proc:
@@ -221,10 +221,8 @@ class ProcessRunner:
 
 
 class ToolInstaller:
-    """Checks and installs Kali tool packages."""
-
     @staticmethod
-    def is_installed(tool_name: str) -> bool:
+    def is_installed(tool_name):
         result = subprocess.run(
             f"which {tool_name}", shell=True,
             capture_output=True, text=True
@@ -232,7 +230,7 @@ class ToolInstaller:
         return result.returncode == 0
 
     @staticmethod
-    def install_package(package: str, callback=None) -> tuple:
+    def install_package(package, callback=None):
         cmd = f"sudo apt-get install -y {package}"
         proc = subprocess.Popen(
             cmd, shell=True,
@@ -248,25 +246,8 @@ class ToolInstaller:
         return proc.returncode, "".join(output)
 
     @staticmethod
-    def bulk_install(packages: list, callback=None) -> tuple:
-        pkg_str = " ".join(packages)
-        cmd = f"sudo apt-get install -y {pkg_str}"
-        proc = subprocess.Popen(
-            cmd, shell=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True
-        )
-        output = []
-        for line in iter(proc.stdout.readline, ""):
-            output.append(line)
-            if callback:
-                callback(line)
-        proc.wait()
-        return proc.returncode, "".join(output)
-
-    @staticmethod
-    def update_repos(callback=None) -> tuple:
-        cmd = "sudo apt-get update"
+    def bulk_install(packages, callback=None):
+        cmd = f"sudo apt-get install -y {' '.join(packages)}"
         proc = subprocess.Popen(
             cmd, shell=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

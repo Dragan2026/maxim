@@ -74,16 +74,22 @@ class MaximWindow(QMainWindow):
 
         self.runner = ProcessRunner()
         self.session = Session()
-        self.ai = AIManager()
+        self.ai = None  # Lazy-loaded
         self.current_thread = None
 
         self._build_ui()
         self._build_menu()
-        self._update_status()
+
+        # Show window immediately, then handle startup tasks
+        QTimer.singleShot(100, self._startup)
+
+    def _startup(self):
+        """Run after window is visible — ask password, init AI."""
         self._ask_sudo_password()
+        self.ai = AIManager()
+        self._update_status()
 
     def _ask_sudo_password(self):
-        """Ask for sudo password once at startup so commands can run with sudo."""
         pwd, ok = QInputDialog.getText(
             self, "Sudo Password",
             "Enter your sudo password (needed to run privileged commands):",
@@ -91,6 +97,7 @@ class MaximWindow(QMainWindow):
         )
         if ok and pwd:
             self.runner.set_sudo_password(pwd)
+            self.terminal.appendPlainText("[OK] Sudo authenticated.\n")
 
     def _build_ui(self):
         central = QWidget()
@@ -408,7 +415,7 @@ class MaximWindow(QMainWindow):
             return
 
         # 4. Unknown — send to AI
-        if self.ai.is_available():
+        if self.ai and self.ai.is_available():
             self._ai_execute(query)
         else:
             self.terminal.appendPlainText(
@@ -536,7 +543,7 @@ class MaximWindow(QMainWindow):
             f'<span style="color:#fafafa;font-size:15px;">{msg}</span></div>'
         )
 
-        if not self.ai.is_available():
+        if not self.ai or not self.ai.is_available():
             route = SmartRouter.route(msg)
             if route["tools"]:
                 parts = []
@@ -597,12 +604,16 @@ class MaximWindow(QMainWindow):
             QLineEdit.Normal, ""
         )
         if ok and key.strip():
+            if not self.ai:
+                self.ai = AIManager()
             self.ai.set_api_key(pid, key.strip())
             self.ai.switch_provider(pid)
             self._update_status()
             QMessageBox.information(self, "Saved", f"API key saved. Switched to {prov['name']}.")
 
     def _quick_switch_provider(self, pid):
+        if not self.ai:
+            self.ai = AIManager()
         self.ai.switch_provider(pid)
         self._update_status()
         prov = PROVIDERS.get(pid, {})
@@ -610,6 +621,10 @@ class MaximWindow(QMainWindow):
             self._set_api_key_dialog()
 
     def _update_status(self):
+        if not self.ai:
+            self.ai_status.setText("AI: Loading...")
+            self.ai_status.setStyleSheet("color: #52525b; font-size: 13px; padding: 4px 14px; background: #18181b; border-radius: 12px;")
+            return
         status = self.ai.get_status()
         if self.ai.is_available():
             self.ai_status.setText(f"AI: {status}")
