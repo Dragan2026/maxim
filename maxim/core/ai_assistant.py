@@ -535,9 +535,17 @@ class AIManager:
 
         if self.active_provider != "ollama" and self.online and self.online.is_available():
             try:
-                return self.online.chat(user_message, stream_callback)
+                result = self.online.chat(user_message, stream_callback)
+                if not result.startswith("[AI Error]"):
+                    return result
+                # Online returned error — try Ollama fallback
+                if self.ollama.is_available():
+                    if stream_callback:
+                        stream_callback("\n[Online AI failed, falling back to Ollama...]\n")
+                    return self.ollama.chat(user_message, stream_callback)
+                return result
             except Exception as e:
-                # Online failed — try Ollama fallback
+                # Online exception — try Ollama fallback
                 if self.ollama.is_available():
                     if stream_callback:
                         stream_callback("\n[Online AI failed, falling back to Ollama...]\n")

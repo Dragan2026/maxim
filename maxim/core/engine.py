@@ -96,27 +96,24 @@ class ProcessRunner:
         self._sudo_password = password
         self._cache_sudo()
 
+    def _escape_pw(self):
+        """Escape password for safe use in shell single quotes."""
+        return self._sudo_password.replace("'", "'\\''") if self._sudo_password else ""
+
     def _cache_sudo(self):
         """Cache sudo credentials so all future sudo commands work without stdin pipe."""
         if not self._sudo_password:
             return False
         try:
+            pw = self._escape_pw()
             result = subprocess.run(
-                f"echo '{self._sudo_password}' | sudo -S -v",
+                f"echo '{pw}' | sudo -S -v",
                 shell=True, capture_output=True, text=True, timeout=5
             )
             self._sudo_cached = (result.returncode == 0)
             return self._sudo_cached
         except Exception:
             return False
-
-    def _refresh_sudo(self):
-        """Refresh sudo cache before running a sudo command."""
-        if self._sudo_password:
-            subprocess.run(
-                f"echo '{self._sudo_password}' | sudo -S -v",
-                shell=True, capture_output=True, text=True, timeout=5
-            )
 
     def needs_external_terminal(self, cmd):
         words = cmd.strip().split()
@@ -163,17 +160,21 @@ class ProcessRunner:
 
         start = time.time()
         output_lines = []
+        proc = None
 
         try:
-            proc = subprocess.Popen(
-                cmd, shell=True,
+            popen_kwargs = dict(
+                shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=merged_env,
-                preexec_fn=os.setsid,
                 bufsize=1,
                 universal_newlines=True,
             )
+            if hasattr(os, 'setsid'):
+                popen_kwargs['preexec_fn'] = os.setsid
+
+            proc = subprocess.Popen(cmd, **popen_kwargs)
             with self.lock:
                 self.active_processes[proc.pid] = proc
 
@@ -192,32 +193,36 @@ class ProcessRunner:
             output_lines.append(f"[ERROR] {e}\n")
             exit_code = -1
         finally:
-            with self.lock:
-                self.active_processes.pop(proc.pid, None)
+            if proc is not None:
+                with self.lock:
+                    self.active_processes.pop(proc.pid, None)
 
         duration = time.time() - start
         output = "".join(output_lines)
         return exit_code, output, duration
 
+    def _kill_proc(self, proc):
+        try:
+            if hasattr(os, 'killpg') and hasattr(os, 'getpgid'):
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            else:
+                proc.terminate()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
     def kill(self, pid):
         with self.lock:
             proc = self.active_processes.get(pid)
             if proc:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    proc.kill()
+                self._kill_proc(proc)
 
     def kill_all(self):
         with self.lock:
             for pid, proc in list(self.active_processes.items()):
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                self._kill_proc(proc)
             self.active_processes.clear()
 
 

@@ -4,6 +4,7 @@ Maxim Main Window — clean CLI-style pentesting interface.
 
 import os
 import re
+import html
 import webbrowser
 import threading
 from datetime import datetime
@@ -407,11 +408,14 @@ class MaximWindow(QMainWindow):
 
         if route["tools"]:
             tool = route["tools"][0]
-            best_cmd = tool["common_commands"][0]["cmd"]
-            needs_root = tool.get("needs_root", False)
-            cmd_filled = self._fill_placeholders(best_cmd, query)
-            if cmd_filled:
-                self._execute_command(cmd_filled, as_root=needs_root)
+            if tool.get("common_commands"):
+                best_cmd = tool["common_commands"][0]["cmd"]
+                needs_root = tool.get("needs_root", False)
+                cmd_filled = self._fill_placeholders(best_cmd, query)
+                if cmd_filled:
+                    self._execute_command(cmd_filled, as_root=needs_root)
+            else:
+                self._execute_command(f"{tool['name']} --help")
             return
 
         # 4. Unknown — send to AI
@@ -547,10 +551,11 @@ class MaximWindow(QMainWindow):
             return
         self.ai_input.clear()
 
+        safe_msg = html.escape(msg)
         self.ai_chat.append(
             f'<div style="background:#1e3a5f;border-radius:10px;padding:10px;margin:6px 40px 6px 6px;">'
             f'<b style="color:#60a5fa;">You:</b> '
-            f'<span style="color:#fafafa;font-size:15px;">{msg}</span></div>'
+            f'<span style="color:#fafafa;font-size:15px;">{safe_msg}</span></div>'
         )
 
         if not self.ai or not self.ai.is_available():
@@ -584,7 +589,7 @@ class MaximWindow(QMainWindow):
         self._ai_thread = AIStreamSignal(self.ai, msg)
 
         def on_done(full):
-            text = full.replace("\n", "<br>")
+            text = html.escape(full).replace("\n", "<br>")
             self.ai_chat.append(
                 f'<div style="background:#18181b;border-radius:10px;padding:10px;margin:6px 6px 6px 40px;">'
                 f'<b style="color:#4ade80;">Maxim AI</b> '
