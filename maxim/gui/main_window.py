@@ -1069,6 +1069,15 @@ class MaximWindow(QMainWindow):
         lay.addLayout(btn_row)
         return card
 
+    def _show_tool_commands(self, tool):
+        """Put the tool's first common command into the prompt and execute."""
+        cmds = tool.get("common_commands", [])
+        if cmds:
+            self.prompt_input.setText(cmds[0])
+            self._on_prompt_submit()
+        else:
+            self._execute_command(tool["name"] + " --help")
+
     def _filter_tools(self, text):
         self._populate_tools_grid(text)
 
