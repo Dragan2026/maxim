@@ -213,6 +213,10 @@ class MaximWindow(QMainWindow):
         self.prompt_input = QLineEdit()
         self.prompt_input.setPlaceholderText('e.g. "scan 192.168.1.0/24" or "sudo nmap -sV target" or "crack this hash"')
         self.prompt_input.returnPressed.connect(self._on_prompt_submit)
+        self.prompt_input.installEventFilter(self)
+        self._cmd_history = []
+        self._history_idx = -1
+        self._history_draft = ""
         self.prompt_input.setStyleSheet("""
             QLineEdit {
                 background-color: #09090b; border: 2px solid #27272a; border-radius: 12px;
@@ -481,12 +485,41 @@ class MaximWindow(QMainWindow):
     #  PROMPT HANDLING
     # ═══════════════════════════════════════
 
+    def eventFilter(self, obj, event):
+        """Handle up/down arrow keys for command history."""
+        if obj == self.prompt_input and event.type() == event.KeyPress:
+            key = event.key()
+            if key == Qt.Key_Up and self._cmd_history:
+                if self._history_idx == -1:
+                    self._history_draft = self.prompt_input.text()
+                    self._history_idx = len(self._cmd_history) - 1
+                elif self._history_idx > 0:
+                    self._history_idx -= 1
+                self.prompt_input.setText(self._cmd_history[self._history_idx])
+                return True
+            elif key == Qt.Key_Down:
+                if self._history_idx == -1:
+                    return True
+                if self._history_idx < len(self._cmd_history) - 1:
+                    self._history_idx += 1
+                    self.prompt_input.setText(self._cmd_history[self._history_idx])
+                else:
+                    self._history_idx = -1
+                    self.prompt_input.setText(self._history_draft)
+                return True
+        return super().eventFilter(obj, event)
+
     def _on_prompt_submit(self):
         if self._running:
             return
         query = self.prompt_input.text().strip()
         if not query:
             return
+        # Save to history
+        if not self._cmd_history or self._cmd_history[-1] != query:
+            self._cmd_history.append(query)
+        self._history_idx = -1
+        self._history_draft = ""
         self.prompt_input.clear()
         q_lower = query.lower().strip()
 
