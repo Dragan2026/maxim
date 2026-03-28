@@ -1108,29 +1108,13 @@ class MaximWindow(QMainWindow):
         script.write(f"rm -f '{signal_file}'\n")
         script.write(f"cd '{essid_dir}'\n\n")
 
-        # Set up monitor mode manually — no --kill (keeps NetworkManager + wlan0 alive)
+        # Set up monitor mode on wlan1 only — wlan0 untouched
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Disconnect wlan0 from the target network BEFORE deauthing
-        # so wifite's deauth doesn't kill our connection mid-capture.
-        # We reconnect wlan0 after capture is done.
-        script.write("# Save current wlan0 connection to restore later\n")
-        script.write("WLAN0_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep 'wlan0' | cut -d: -f1)\n")
-        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
-        script.write("  echo \"Disconnecting wlan0 from $WLAN0_CON (will reconnect after capture)\"\n")
-        script.write("  nmcli dev disconnect wlan0 2>/dev/null\n")
-        script.write("fi\n\n")
-
-        # wifite: scan + capture + deauth, all automatic
+        # wifite: scan + capture + deauth — wlan1 only, no --kill
         script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 10\n\n")
-
-        # Reconnect wlan0 after wifite is done
-        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
-        script.write("  echo 'Reconnecting wlan0...'\n")
-        script.write("  nmcli con up \"$WLAN0_CON\" 2>/dev/null\n")
-        script.write("fi\n\n")
 
         # If wifite exits, write signal so poller knows
         script.write(f"echo 'DONE' > '{signal_file}'\n")
