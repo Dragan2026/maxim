@@ -1097,43 +1097,15 @@ class MaximWindow(QMainWindow):
     # Wordlists in order of priority — tries each until cracked
     WORDLISTS = [
         "/usr/share/wordlists/gago.txt",
-        "/usr/share/wordlists/rockyou.txt",
-        "/usr/share/wordlists/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
-        "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
-        "/usr/share/wordlists/seclists/Passwords/xato-net-10-million-passwords-1000000.txt",
-        "/usr/share/seclists/Passwords/xato-net-10-million-passwords-1000000.txt",
-        "/usr/share/wordlists/seclists/Passwords/darkweb2017-top10000.txt",
-        "/usr/share/seclists/Passwords/darkweb2017-top10000.txt",
-        "/usr/share/wordlists/wifite.txt",
-        "/usr/share/wordlists/fasttrack.txt",
-        "/usr/share/wordlists/metasploit/password.lst",
-        "/usr/share/john/password.lst",
     ]
 
     def _get_wordlists(self):
-        """Return all existing wordlists: rockyou first, then extras, then downloaded/custom."""
+        """Return all existing wordlists from WORDLISTS list."""
         existing = []
-        # 1. Main wordlist — rockyou.txt
         for wl in self.WORDLISTS:
             if os.path.exists(wl):
                 existing.append(wl)
-        # 2. Scan for any extra downloaded or custom wordlists
-        extra_dirs = [
-            "/usr/share/wordlists",
-            "/usr/share/seclists/Passwords",
-            os.path.expanduser("~/wordlists"),
-            os.path.expanduser("~/Desktop/wordlists"),
-        ]
-        for d in extra_dirs:
-            if os.path.isdir(d):
-                try:
-                    for f in os.listdir(d):
-                        fp = os.path.join(d, f)
-                        if fp not in existing and os.path.isfile(fp) and f.endswith(('.txt', '.lst')):
-                            existing.append(fp)
-                except Exception:
-                    pass
-        return existing if existing else ["/usr/share/wordlists/rockyou.txt"]
+        return existing if existing else ["/usr/share/wordlists/gago.txt"]
 
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
         """Build crack command: rockyou.txt first, then all other wordlists if no result."""
