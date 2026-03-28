@@ -161,9 +161,12 @@ class ProcessRunner:
             else:
                 launch = f'xterm -e bash {script.name}'
 
-            subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
+            proc = subprocess.Popen(launch, shell=True, preexec_fn=os.setsid)
+            self._terminal_proc = proc
+            return proc
         except Exception as e:
             print(f"[Error opening terminal] {e}")
+            return None
 
     def run(self, cmd, as_root=False, callback=None, env=None):
         if as_root and os.geteuid() != 0:

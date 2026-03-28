@@ -5,6 +5,7 @@ Maxim Main Window — clean CLI-style pentesting interface.
 import os
 import re
 import html
+import signal
 import subprocess
 import webbrowser
 import threading
@@ -1225,9 +1226,22 @@ class MaximWindow(QMainWindow):
         if not cap_file:
             return  # Still waiting
 
-        # Found it — stop polling and crack
+        # Found it — stop polling, kill external terminal, crack internally
         self._hs_poll_timer.stop()
         self._hs_essid_dir = None
+
+        # Kill the external capture terminal and all its children (airodump, aireplay, etc.)
+        term_proc = getattr(self.runner, '_terminal_proc', None)
+        if term_proc:
+            try:
+                pgid = os.getpgid(term_proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception:
+                try:
+                    term_proc.terminate()
+                except Exception:
+                    pass
+            self.runner._terminal_proc = None
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
