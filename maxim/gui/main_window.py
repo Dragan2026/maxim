@@ -1255,8 +1255,18 @@ class MaximWindow(QMainWindow):
         self.terminal.clear()
 
     def _add_word_to_wordlist_btn(self):
-        """Add Wordlist button — add a word to rockyou.txt."""
-        self._add_word_to_wordlist("/usr/share/wordlists/rockyou.txt")
+        """Add a new wordlist .txt file to /usr/share/wordlists/."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Select Wordlist File to Add",
+            os.path.expanduser("~"),
+            "Wordlists (*.txt *.lst);;All Files (*)")
+        if filepath:
+            fname = os.path.basename(filepath)
+            self._execute_command(
+                f"sudo cp '{filepath}' '/usr/share/wordlists/{fname}' && "
+                f"echo 'Added wordlist: /usr/share/wordlists/{fname}' && "
+                f"wc -l '/usr/share/wordlists/{fname}'"
+            )
 
     def _add_word_to_wordlist(self, filepath):
         """Add a word/password to a wordlist file."""
