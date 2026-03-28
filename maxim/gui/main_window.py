@@ -731,10 +731,12 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
-        # 5. Handshake capture workflow
+        # 5. Handshake capture / hack / crack WiFi workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
             handshake_match = re.search(r'handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
+        if not handshake_match:
+            handshake_match = re.search(r'(?:hack|crack)\s+(?:the\s+)?(?:wifi\s+|network\s+|ap\s+)?(?:essid\s+|ssid\s+)?(.+)', q_lower)
         if handshake_match:
             essid = handshake_match.group(1).strip().strip('"\'')
             # Strip leading "essid" / "ssid" / "network" keywords
@@ -1249,12 +1251,16 @@ class MaximWindow(QMainWindow):
 
         # Copy the .cap into the ESSID subfolder so it's organized
         import shutil
-        essid_dir = getattr(self, '_hs_essid_dir_path', essid_dir)
-        os.makedirs(essid_dir, exist_ok=True)
-        dest_cap = os.path.join(essid_dir, os.path.basename(cap_file))
-        if os.path.realpath(cap_file) != os.path.realpath(dest_cap):
-            shutil.copy2(cap_file, dest_cap)
-            cap_file = dest_cap
+        essid_dir = getattr(self, '_hs_essid_dir_path', '')
+        if essid_dir:
+            os.makedirs(essid_dir, exist_ok=True)
+            dest_cap = os.path.join(essid_dir, os.path.basename(cap_file))
+            try:
+                if os.path.realpath(cap_file) != os.path.realpath(dest_cap):
+                    shutil.copy2(cap_file, dest_cap)
+                    cap_file = dest_cap
+            except Exception as e:
+                self.terminal.appendPlainText(f"  [!] Could not copy cap: {e}")
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
