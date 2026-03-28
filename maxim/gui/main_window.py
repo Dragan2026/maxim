@@ -1157,14 +1157,24 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # ── Switch to monitor mode ONLY on wlan1 ──
+        # ── Switch to monitor mode + set channel — ONLY on wlan1 ──
         script.write(f"sudo ip link set {iface} down\n")
         script.write(f"sudo iw dev {iface} set type monitor\n")
-        script.write(f"sudo ip link set {iface} up\n\n")
+        script.write(f"sudo ip link set {iface} up\n")
+        script.write(f"sudo iw dev {iface} set channel $CHANNEL\n\n")
 
-        # Passive capture only — no deauth, no hcxdumptool, no airmon-ng
-        # Just airodump-ng listening on the exact channel+BSSID
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
+        # Capture with tcpdump — does NOT kill NetworkManager (unlike airodump-ng)
+        cap_file = f"{capture_prefix}-01.cap"
+        script.write(f"echo 'Capturing packets on channel $CHANNEL...'\n")
+        script.write(f"echo 'Waiting for handshake (WPA 4-way). This is passive — no disruption.'\n")
+        script.write(f"echo 'Tip: toggle WiFi on a device connected to {essid} to speed this up.'\n")
+        script.write("echo\n")
+        script.write(f"sudo tcpdump -i {iface} -w '{cap_file}' -s 0 'ether proto 0x888e or subtype assocreq or subtype assocresp or subtype reassocreq or subtype reassocresp or subtype probereq or subtype proberesp or subtype beacon or subtype disassoc or subtype deauth or subtype auth' 2>&1 &\n")
+        script.write("TCPDUMP_PID=$!\n")
+        script.write("echo \"tcpdump PID: $TCPDUMP_PID\"\n")
+        script.write("echo 'Press Enter when done (or wait for MAXIM to auto-detect handshake)'\n")
+        script.write("read\n")
+        script.write("sudo kill $TCPDUMP_PID 2>/dev/null\n\n")
 
         # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
