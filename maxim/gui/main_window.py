@@ -1112,7 +1112,9 @@ class MaximWindow(QMainWindow):
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n")
-        script.write(f"cd '{essid_dir}'\n\n")
+        script.write(f"cd '{essid_dir}'\n")
+        # Timestamp marker so we can find files created during this session
+        script.write("touch /tmp/maxim_capture_start\n\n")
 
         # Save the integrated adapter's active connection before wifite kills NetworkManager
         script.write(f"SAVED_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep '{other_iface}' | cut -d: -f1)\n")
@@ -1122,6 +1124,12 @@ class MaximWindow(QMainWindow):
 
         # Run wifite with --kill (needed for deauth to work)
         script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
+
+        # Copy any .cap files wifite created into the ESSID subfolder
+        script.write(f"echo '[*] Saving capture files to {essid_dir}/'\n")
+        # wifite saves in current dir or hs/ subfolder
+        script.write(f"find . ~/hs /tmp -maxdepth 2 \\( -name '*.cap' -o -name '*.pcap' \\) -newer /tmp/maxim_capture_start -exec cp -v {{}} '{essid_dir}/' \\; 2>/dev/null\n")
+        script.write("rm -f /tmp/maxim_capture_start\n\n")
 
         # Restore NetworkManager + integrated adapter connection
         script.write("echo\necho '[*] Restoring network...'\n")
