@@ -1144,10 +1144,9 @@ class MaximWindow(QMainWindow):
             wordlists.insert(0, rockyou)
 
         if tool == "aircrack":
-            if len(wordlists) > 1:
-                combined = "' -w '".join(wordlists)
-                return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
-            return f"sudo aircrack-ng -w '{wordlists[0]}' '{filepath}'"
+            # aircrack-ng accepts comma-separated wordlists
+            combined = ",".join(wordlists)
+            return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
 
         elif tool == "john":
             # Stage 1: rockyou.txt with rules
@@ -1180,8 +1179,11 @@ class MaximWindow(QMainWindow):
 
         if ext in ('.cap', '.pcap'):
             # WiFi capture — auto crack with all wordlists
-            wl_count = len(self._get_wordlists())
-            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {wl_count} wordlists...\n")
+            wls = self._get_wordlists()
+            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {len(wls)} wordlists:\n")
+            for wl in wls:
+                self.terminal.appendPlainText(f"  - {wl}\n")
+            self.terminal.appendPlainText("")
             self._execute_command(self._build_crack_cmd("aircrack", filepath))
 
         elif ext in ('.hc22000', '.hccapx'):
