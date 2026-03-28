@@ -429,6 +429,9 @@ class MaximWindow(QMainWindow):
         wordlist_menu.addAction("Show installed wordlists", lambda: self._execute_command(
             "echo '=== Wordlists ===' && find /usr/share/wordlists -name '*.txt' -o -name '*.lst' 2>/dev/null | head -50 && echo && du -sh /usr/share/wordlists/* 2>/dev/null"
         ))
+        wordlist_menu.addSeparator()
+        wordlist_menu.addAction("Add word to rockyou.txt", lambda: self._add_word_to_wordlist("/usr/share/wordlists/rockyou.txt"))
+        wordlist_menu.addAction("Add word to custom wordlist...", self._add_word_to_custom_wordlist)
 
         ai_menu = menubar.addMenu("AI")
 
@@ -1224,6 +1227,25 @@ class MaximWindow(QMainWindow):
 
     def _clear_terminal(self):
         self.terminal.clear()
+
+    def _add_word_to_wordlist(self, filepath):
+        """Add a word/password to a wordlist file."""
+        word, ok = QInputDialog.getText(self, "Add Word",
+            f"Enter word/password to add to:\n{filepath}")
+        if ok and word.strip():
+            self._execute_command(
+                f"sudo gzip -d '{filepath}.gz' 2>/dev/null; "
+                f"echo '{word.strip()}' | sudo tee -a '{filepath}' && "
+                f"echo 'Added: {word.strip()}'"
+            )
+
+    def _add_word_to_custom_wordlist(self):
+        """Add a word to a custom wordlist file chosen by user."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Select Wordlist", "/usr/share/wordlists",
+            "Wordlists (*.txt *.lst);;All Files (*)")
+        if filepath:
+            self._add_word_to_wordlist(filepath)
 
     # ═══════════════════════════════════════
     #  PLACEHOLDERS
