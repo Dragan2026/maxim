@@ -1125,11 +1125,10 @@ class MaximWindow(QMainWindow):
         # Open external terminal
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
-        # Poll for .cap files with valid handshake in:
-        # 1. The essid_dir (cd target)
-        # 2. wifite's default hs/ directory
-        # 3. Current working directory
+        # Record start time so poller ignores old .cap files
+        self._hs_capture_start = time.time()
         self._hs_essid_dir = essid_dir
+        self._hs_essid_dir_path = essid_dir
         self._hs_wifite_dirs = [
             essid_dir,
             os.path.expanduser("~/hs"),
@@ -1182,23 +1181,30 @@ class MaximWindow(QMainWindow):
                 # wifite finished — do one final check for .cap files before giving up
                 pass  # fall through to .cap check below
 
-        # Check .cap files for valid handshake in all possible directories
+        # Check .cap files for valid handshake — search wifite dirs for NEW files only
+        # (only files created AFTER capture started)
+        capture_start = getattr(self, '_hs_capture_start', 0)
         all_caps = []
         for search_dir in getattr(self, '_hs_wifite_dirs', [essid_dir]):
             all_caps.extend(glob.glob(f"{search_dir}/*.cap"))
             all_caps.extend(glob.glob(f"{search_dir}/**/*.cap", recursive=True))
-        # Deduplicate and sort by modification time (newest first)
+        # Only consider files created/modified AFTER we started the capture
+        fresh_caps = []
         seen = set()
-        cap_files = []
         for cf in all_caps:
             real = os.path.realpath(cf)
-            if real not in seen:
-                seen.add(real)
-                cap_files.append(cf)
-        cap_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                if os.path.getmtime(cf) >= capture_start:
+                    fresh_caps.append(cf)
+            except Exception:
+                pass
+        fresh_caps.sort(key=lambda f: os.path.getmtime(f), reverse=True)
 
         cap_file = None
-        for cf in cap_files:
+        for cf in fresh_caps:
             if self._cap_has_handshake(cf):
                 cap_file = cf
                 break
@@ -1240,6 +1246,15 @@ class MaximWindow(QMainWindow):
                 except Exception:
                     pass
             self.runner._terminal_proc = None
+
+        # Copy the .cap into the ESSID subfolder so it's organized
+        import shutil
+        essid_dir = getattr(self, '_hs_essid_dir_path', essid_dir)
+        os.makedirs(essid_dir, exist_ok=True)
+        dest_cap = os.path.join(essid_dir, os.path.basename(cap_file))
+        if os.path.realpath(cap_file) != os.path.realpath(dest_cap):
+            shutil.copy2(cap_file, dest_cap)
+            cap_file = dest_cap
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
