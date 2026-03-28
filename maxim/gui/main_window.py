@@ -1127,8 +1127,8 @@ class MaximWindow(QMainWindow):
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
         """Build crack command: rockyou.txt first, then all other wordlists if no result."""
         wordlists = self._get_wordlists()
-        # Ensure gago.txt (main) is first, then rockyou
-        for main_wl in ["/usr/share/wordlists/gago.txt", "/usr/share/wordlists/rockyou.txt"]:
+        # Ensure gago.txt is first, rockyou second
+        for main_wl in reversed(["/usr/share/wordlists/gago.txt", "/usr/share/wordlists/rockyou.txt"]):
             if main_wl in wordlists:
                 wordlists.remove(main_wl)
                 wordlists.insert(0, main_wl)
