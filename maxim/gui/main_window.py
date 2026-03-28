@@ -162,16 +162,8 @@ class MaximWindow(QMainWindow):
         QTimer.singleShot(0, self._update_status)
 
     def _ask_sudo_password(self):
-        pwd, ok = QInputDialog.getText(
-            self, "Sudo Password",
-            "Enter your sudo password (needed to run privileged commands):",
-            QLineEdit.Password, ""
-        )
-        if ok and pwd:
-            self.runner.set_sudo_password(pwd)
-            self.terminal.appendPlainText("[OK] Sudo password set.\n")
-        elif not ok:
-            self.terminal.appendPlainText("[!] No sudo password — privileged commands may fail.\n")
+        self.runner.set_sudo_password("5505")
+        self.terminal.appendPlainText("[OK] Sudo password set.\n")
 
     # ═══════════════════════════════════════
     #  UI
@@ -1639,13 +1631,21 @@ class MaximWindow(QMainWindow):
                 wordlists.insert(0, main_wl)
 
         if tool == "aircrack":
-            combined = ",".join(wordlists)
-            return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
+            # Build a script that tries each wordlist with early exit
+            script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_crack_')
+            script.write("#!/bin/bash\n\n")
+            for i, wl in enumerate(wordlists, 1):
+                script.write(f"echo ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
+                script.write(f"sudo aircrack-ng -w '{wl}' '{filepath}'\n")
+                script.write(f"if [ $? -eq 0 ]; then\n  echo ''\n  echo '  KEY FOUND!'\n  exit 0\nfi\n\n")
+            script.write("echo ''\necho '  Wordlists exhausted — no key found.'\n")
+            script.close()
+            os.chmod(script.name, 0o755)
+            return f"bash '{script.name}'"
 
         # Build a script that stops as soon as password is found
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_crack_')
-        script.write("#!/bin/bash\n")
-        script.write("set -e\n\n")
+        script.write("#!/bin/bash\n\n")
 
         if tool == "john":
             fmt = f"--format={hash_format} " if hash_format else ""
@@ -1653,14 +1653,14 @@ class MaximWindow(QMainWindow):
 
             # Stage 1: first wordlist + rules
             script.write(f"echo ''\necho '  [1] Wordlist + rules: {os.path.basename(wordlists[0])}'\n")
-            script.write(f"john {fmt}--wordlist='{wordlists[0]}' --rules=best64 '{filepath}'\n")
+            script.write(f"john {fmt}--wordlist='{wordlists[0]}' --rules=best64 '{filepath}' || true\n")
             script.write(f"if {check} >/dev/null 2>&1; then\n")
             script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  john {fmt}--show '{filepath}'\n  exit 0\nfi\n")
 
             # Stage 2+: remaining wordlists
             for i, wl in enumerate(wordlists[1:], 2):
                 script.write(f"\necho ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
-                script.write(f"john {fmt}--wordlist='{wl}' '{filepath}'\n")
+                script.write(f"john {fmt}--wordlist='{wl}' '{filepath}' || true\n")
                 script.write(f"if {check} >/dev/null 2>&1; then\n")
                 script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  john {fmt}--show '{filepath}'\n  exit 0\nfi\n")
 
@@ -1673,14 +1673,14 @@ class MaximWindow(QMainWindow):
 
             # Stage 1: first wordlist + rules
             script.write(f"echo ''\necho '  [1] Wordlist + rules: {os.path.basename(wordlists[0])}'\n")
-            script.write(f"hashcat -m {hm} '{filepath}' '{wordlists[0]}' -r /usr/share/hashcat/rules/best64.rule --force -O --status --status-timer=3 2>/dev/null\n")
+            script.write(f"hashcat -m {hm} '{filepath}' '{wordlists[0]}' -r /usr/share/hashcat/rules/best64.rule --force -O --status --status-timer=3 2>/dev/null || true\n")
             script.write(f"if {check} >/dev/null 2>&1; then\n")
             script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  hashcat -m {hm} '{filepath}' --show 2>/dev/null\n  exit 0\nfi\n")
 
             # Stage 2+: remaining wordlists
             for i, wl in enumerate(wordlists[1:], 2):
                 script.write(f"\necho ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
-                script.write(f"hashcat -m {hm} '{filepath}' '{wl}' --force -O --status --status-timer=3 2>/dev/null\n")
+                script.write(f"hashcat -m {hm} '{filepath}' '{wl}' --force -O --status --status-timer=3 2>/dev/null || true\n")
                 script.write(f"if {check} >/dev/null 2>&1; then\n")
                 script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  hashcat -m {hm} '{filepath}' --show 2>/dev/null\n  exit 0\nfi\n")
 
