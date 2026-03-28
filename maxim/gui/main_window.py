@@ -594,6 +594,10 @@ class MaximWindow(QMainWindow):
             dm = re.search(r'([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})', query)
             if dm and dm.group(1) not in ('of', 'the'):
                 target_ip = dm.group(1)
+        if not target_ip:
+            # "my ip", "myself", "this machine", "localhost", "this pc" → 127.0.0.1
+            if re.search(r'\b(my\s*(?:ip|machine|pc|computer|server|self)|myself|this\s*(?:machine|pc|computer|server)|localhost)\b', q_lower):
+                target_ip = "127.0.0.1"
 
         # Extract port if specified (e.g. "syn flood 192.168.1.1 port 443")
         port_match = re.search(r'(?:port|:)\s*(\d{1,5})', q_lower)
