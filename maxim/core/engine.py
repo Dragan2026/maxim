@@ -210,6 +210,18 @@ class ProcessRunner:
                 # Filter out sudo password prompt
                 if clean.strip().startswith("[sudo] password for"):
                     continue
+                # Handle \r carriage returns (hashcat/john progress lines)
+                # Split on \r and only keep the last segment (the overwritten line)
+                if '\r' in clean:
+                    parts = clean.split('\r')
+                    # Last non-empty part is what would be visible on a real terminal
+                    for part in parts:
+                        part = part.strip()
+                        if part:
+                            output_lines.append(part + "\n")
+                            if callback:
+                                callback(part + "\n")
+                    continue
                 output_lines.append(clean)
                 if callback:
                     callback(clean)

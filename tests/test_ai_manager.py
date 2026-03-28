@@ -121,6 +121,9 @@ def test_provider_name():
 def test_clear_context():
     print("\n=== Clear Context ===")
     mgr = AIManager()
+    # Ensure ollama is initialized for this test
+    if mgr.ollama is None:
+        mgr.switch_provider("ollama")
     mgr.ollama.conversation.append({"role": "user", "content": "test"})
     mgr.clear_context()
     check("Ollama context cleared", len(mgr.ollama.conversation) == 0)
