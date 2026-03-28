@@ -1097,7 +1097,6 @@ class MaximWindow(QMainWindow):
 
         # ── Single bash script — no python, no heredocs, pure bash ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
-        target_file = "/tmp/maxim_target_info"
 
         lines = [
             "#!/bin/bash",
@@ -1105,7 +1104,7 @@ class MaximWindow(QMainWindow):
             "echo '5505' | sudo -S -v 2>/dev/null",
             "",
             f"mkdir -p '{essid_dir}'",
-            f"rm -f '{signal_file}' '{target_file}'",
+            f"rm -f '{signal_file}'",
             "",
             "# ── Step 1: Monitor mode ──",
             "echo '══════════════════════════════════════════'",
@@ -1156,42 +1155,44 @@ class MaximWindow(QMainWindow):
             "  # airodump CSV: BSSID, First, Last, channel, Speed, Privacy, ..., ESSID(field 14)",
             "  echo '  Networks found:'",
             "  echo '  ─────────────────────────────────────────────────────────────'",
-            "  awk -F, '"
-            " /^Station MAC/ { exit }"
-            " /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}/ {"
-            '   gsub(/^ +| +$/, "", $1);'
-            '   gsub(/^ +| +$/, "", $4);'
-            '   gsub(/^ +| +$/, "", $6);'
-            '   gsub(/^ +| +$/, "", $9);'
-            '   gsub(/^ +| +$/, "", $14);'
-            r'   printf "  %-34s %-18s CH:%-4s PWR:%-5s %s\n", $14, $1, $4, $9, $6'
-            " }"
-            "' " + f"'{scan_file}-01.csv'",
-            "  echo '  ─────────────────────────────────────────────────────────────'",
+            "  # Display + find target — simple grep/while, no awk",
+            f"  echo '  Networks found:'",
+            f"  echo '  ─────────────────────────────────────────────────────────────'",
+            f"  while IFS=, read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 rest; do",
+            '    B=$(echo "$f1" | tr -d " ")',
+            "    case \"$B\" in",
+            "      [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])",
+            '        CH=$(echo "$f4" | tr -d " ")',
+            '        E=$(echo "$f14" | sed "s/^ *//;s/ *$//")',
+            '        PWR=$(echo "$f9" | tr -d " ")',
+            '        ENC=$(echo "$f6" | tr -d " ")',
+            '        printf "  %-34s %-18s CH:%-4s PWR:%-5s %s\\n" "$E" "$B" "$CH" "$PWR" "$ENC"',
+            "        ;;",
+            "    esac",
+            f"  done < '{scan_file}-01.csv'",
+            f"  echo '  ─────────────────────────────────────────────────────────────'",
             "  echo ''",
             "",
-            "  # Find our target ESSID (case-insensitive) — write to temp file",
-            "  awk -F, -v target='" + essid + "' '"
-            " BEGIN { IGNORECASE=1 }"
-            " /^Station MAC/ { exit }"
-            " /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}/ {"
-            '   gsub(/^ +| +$/, "", $1);'
-            '   gsub(/^ +| +$/, "", $4);'
-            '   gsub(/^ +| +$/, "", $14);'
-            "   if (tolower($14) == tolower(target)) {"
-            '     print $1 > "' + target_file + '";'
-            '     print $4 >> "' + target_file + '";'
-            '     print $14 >> "' + target_file + '";'
-            "     exit"
-            "   }"
-            " }"
-            "' " + f"'{scan_file}-01.csv'",
+            "  # Find target ESSID (case-insensitive)",
+            f"  while IFS=, read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 rest; do",
+            '    B=$(echo "$f1" | tr -d " ")',
+            "    case \"$B\" in",
+            "      [0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])",
+            '        E=$(echo "$f14" | sed "s/^ *//;s/ *$//")',
+            '        E_LOWER=$(echo "$E" | tr "[:upper:]" "[:lower:]")',
+            f'        TARGET_LOWER=$(echo "{essid}" | tr "[:upper:]" "[:lower:]")',
+            '        if [ "$E_LOWER" = "$TARGET_LOWER" ]; then',
+            '          CH=$(echo "$f4" | tr -d " ")',
+            '          BSSID="$B"',
+            '          CHANNEL="$CH"',
+            '          ESSID_FOUND="$E"',
+            "          break",
+            "        fi",
+            "        ;;",
+            "    esac",
+            f"  done < '{scan_file}-01.csv'",
             "",
-            f"  if [ -f '{target_file}' ]; then",
-            f"    BSSID=$(sed -n '1p' '{target_file}')",
-            f"    CHANNEL=$(sed -n '2p' '{target_file}')",
-            f"    ESSID_FOUND=$(sed -n '3p' '{target_file}')",
-            f"    rm -f '{target_file}'",
+            "  if [ -n \"$BSSID\" ]; then",
             "    echo \"  [*] TARGET: $ESSID_FOUND  |  BSSID: $BSSID  |  Channel: $CHANNEL\"",
             "    echo ''",
             "    break",
