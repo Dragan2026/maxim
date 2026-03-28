@@ -1096,6 +1096,7 @@ class MaximWindow(QMainWindow):
 
     # Wordlists in order of priority — tries each until cracked
     WORDLISTS = [
+        "/usr/share/wordlists/gago.txt",
         "/usr/share/wordlists/rockyou.txt",
         "/usr/share/wordlists/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
         "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
@@ -1137,11 +1138,11 @@ class MaximWindow(QMainWindow):
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
         """Build crack command: rockyou.txt first, then all other wordlists if no result."""
         wordlists = self._get_wordlists()
-        # Ensure rockyou is first
-        rockyou = "/usr/share/wordlists/rockyou.txt"
-        if rockyou in wordlists:
-            wordlists.remove(rockyou)
-            wordlists.insert(0, rockyou)
+        # Ensure gago.txt (main) is first, then rockyou
+        for main_wl in ["/usr/share/wordlists/gago.txt", "/usr/share/wordlists/rockyou.txt"]:
+            if main_wl in wordlists:
+                wordlists.remove(main_wl)
+                wordlists.insert(0, main_wl)
 
         if tool == "aircrack":
             # aircrack-ng accepts comma-separated wordlists
