@@ -1120,12 +1120,6 @@ class MaximWindow(QMainWindow):
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Kill processes that block injection on wlan0 — but NOT NetworkManager
-        # (wpa_supplicant and dhclient on wlan0 interfere with injection)
-        script.write(f"# Kill interfering processes on {iface} only (not NetworkManager)\n")
-        script.write(f"sudo pkill -f 'wpa_supplicant.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhclient.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhcpcd.*{iface}' 2>/dev/null\n\n")
 
         # Quick scan to find BSSID+channel using iw (managed mode not needed —
         # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
