@@ -1105,42 +1105,63 @@ class MaximWindow(QMainWindow):
     ]
 
     def _get_wordlists(self):
-        """Return list of existing wordlists on this system."""
+        """Return all existing wordlists: rockyou first, then extras, then downloaded/custom."""
         existing = []
+        # 1. Main wordlist — rockyou.txt
         for wl in self.WORDLISTS:
             if os.path.exists(wl):
                 existing.append(wl)
+        # 2. Scan for any extra downloaded or custom wordlists
+        extra_dirs = [
+            "/usr/share/wordlists",
+            "/usr/share/seclists/Passwords",
+            os.path.expanduser("~/wordlists"),
+            os.path.expanduser("~/Desktop/wordlists"),
+        ]
+        for d in extra_dirs:
+            if os.path.isdir(d):
+                try:
+                    for f in os.listdir(d):
+                        fp = os.path.join(d, f)
+                        if fp not in existing and os.path.isfile(fp) and f.endswith(('.txt', '.lst')):
+                            existing.append(fp)
+                except Exception:
+                    pass
         return existing if existing else ["/usr/share/wordlists/rockyou.txt"]
 
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
-        """Build a multi-wordlist crack command that tries all available wordlists."""
+        """Build crack command: rockyou.txt first, then all other wordlists if no result."""
         wordlists = self._get_wordlists()
+        # Ensure rockyou is first
+        rockyou = "/usr/share/wordlists/rockyou.txt"
+        if rockyou in wordlists:
+            wordlists.remove(rockyou)
+            wordlists.insert(0, rockyou)
 
         if tool == "aircrack":
-            # Aircrack-ng only takes one wordlist, so combine them
             if len(wordlists) > 1:
                 combined = "' -w '".join(wordlists)
                 return f"sudo aircrack-ng -w '{combined}' '{filepath}'"
             return f"sudo aircrack-ng -w '{wordlists[0]}' '{filepath}'"
 
         elif tool == "john":
-            # John: run with each wordlist + rules for extra coverage
-            cmds = []
-            for wl in wordlists[:3]:  # Top 3 wordlists
-                fmt = f"--format={hash_format} " if hash_format else ""
-                cmds.append(f"john {fmt}--wordlist='{wl}' --rules=best64 '{filepath}'")
-            # Show results at end
+            # Stage 1: rockyou.txt with rules
             fmt = f"--format={hash_format} " if hash_format else ""
+            cmds = [f"john {fmt}--wordlist='{wordlists[0]}' --rules=best64 '{filepath}'"]
+            # Stage 2: all other wordlists (if rockyou didn't crack it)
+            for wl in wordlists[1:]:
+                cmds.append(f"john {fmt}--wordlist='{wl}' '{filepath}'")
+            # Show results
             cmds.append(f"john {fmt}--show '{filepath}'")
             return " ; ".join(cmds)
 
         elif tool == "hashcat":
-            # Hashcat: use rules + multiple wordlists
             cmds = []
-            for wl in wordlists[:3]:
-                cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wl}' -r /usr/share/hashcat/rules/best64.rule --force 2>/dev/null")
-            # Also try combinator/brute force for short passwords
-            cmds.append(f"hashcat -m {hash_format} '{filepath}' -a 3 '?a?a?a?a?a?a?a?a' --increment --force 2>/dev/null")
+            # Stage 1: rockyou.txt with rules
+            cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wordlists[0]}' -r /usr/share/hashcat/rules/best64.rule --force 2>/dev/null")
+            # Stage 2: all other wordlists
+            for wl in wordlists[1:]:
+                cmds.append(f"hashcat -m {hash_format} '{filepath}' '{wl}' --force 2>/dev/null")
             cmds.append(f"hashcat -m {hash_format} '{filepath}' --show 2>/dev/null")
             return " ; ".join(cmds)
 
