@@ -1097,14 +1097,31 @@ class MaximWindow(QMainWindow):
     # Wordlists in order of priority — tries each until cracked
     WORDLISTS = [
         "/usr/share/wordlists/gago.txt",
+        "/usr/share/wordlists/rockyou.txt",
     ]
 
     def _get_wordlists(self):
-        """Return all existing wordlists from WORDLISTS list."""
+        """Return all existing wordlists: gago first, rockyou second, then extras."""
         existing = []
         for wl in self.WORDLISTS:
             if os.path.exists(wl):
                 existing.append(wl)
+        # Scan for extra downloaded or custom wordlists
+        extra_dirs = [
+            "/usr/share/wordlists",
+            "/usr/share/seclists/Passwords",
+            os.path.expanduser("~/wordlists"),
+            os.path.expanduser("~/Desktop/wordlists"),
+        ]
+        for d in extra_dirs:
+            if os.path.isdir(d):
+                try:
+                    for f in os.listdir(d):
+                        fp = os.path.join(d, f)
+                        if fp not in existing and os.path.isfile(fp) and f.endswith(('.txt', '.lst')):
+                            existing.append(fp)
+                except Exception:
+                    pass
         return existing if existing else ["/usr/share/wordlists/gago.txt"]
 
     def _build_crack_cmd(self, tool, filepath, hash_format=None):
