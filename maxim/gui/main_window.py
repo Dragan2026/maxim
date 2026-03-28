@@ -300,6 +300,11 @@ class MaximWindow(QMainWindow):
         restore_net_btn.clicked.connect(self._restore_network)
         qbar.addWidget(restore_net_btn)
 
+        add_wl_btn = QPushButton("Add Wordlist")
+        add_wl_btn.setStyleSheet(btn_style)
+        add_wl_btn.clicked.connect(self._add_word_to_wordlist_btn)
+        qbar.addWidget(add_wl_btn)
+
         clear_btn = QPushButton("Clear")
         clear_btn.setStyleSheet(btn_style)
         clear_btn.clicked.connect(self._clear_terminal)
@@ -1248,6 +1253,10 @@ class MaximWindow(QMainWindow):
 
     def _clear_terminal(self):
         self.terminal.clear()
+
+    def _add_word_to_wordlist_btn(self):
+        """Add Wordlist button — add a word to rockyou.txt."""
+        self._add_word_to_wordlist("/usr/share/wordlists/rockyou.txt")
 
     def _add_word_to_wordlist(self, filepath):
         """Add a word/password to a wordlist file."""
