@@ -1134,7 +1134,19 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # wifite in external terminal — restores NetworkManager + wlan0 when done
+        # Find the OTHER (non-USB / integrated) adapter to save+restore its connection
+        other_iface = None
+        try:
+            for netdev in sorted(os.listdir('/sys/class/net')):
+                if not netdev.startswith('wlan') or netdev == iface:
+                    continue
+                other_iface = netdev
+                break
+        except Exception:
+            pass
+        if not other_iface:
+            other_iface = "wlan1" if iface == "wlan0" else "wlan0"
+
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
@@ -1142,24 +1154,36 @@ class MaximWindow(QMainWindow):
         script.write(f"rm -f '{signal_file}'\n")
         script.write(f"cd '{essid_dir}'\n\n")
 
-        # Save wlan0 connection name before wifite kills it
-        script.write("WLAN0_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep 'wlan0' | cut -d: -f1)\n\n")
+        # Save the integrated adapter's active connection before wifite kills NetworkManager
+        script.write(f"SAVED_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep '{other_iface}' | cut -d: -f1)\n")
+        script.write(f"echo 'USB adapter: {iface} (attack)'\n")
+        script.write(f"echo 'Integrated adapter: {other_iface} (protected)'\n")
+        script.write("echo \"Active connection: $SAVED_CON\"\necho\n\n")
 
-        # Run wifite
+        # Run wifite with --kill (needed for deauth to work)
         script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
 
-        # Restore NetworkManager + wlan0 connection after wifite finishes
-        script.write("echo\necho 'Restoring network...'\n")
+        # Restore NetworkManager + integrated adapter connection
+        script.write("echo\necho '[*] Restoring network...'\n")
         script.write("sudo systemctl start NetworkManager 2>/dev/null\n")
-        script.write("sleep 2\n")
-        script.write("if [ -n \"$WLAN0_CON\" ]; then\n")
-        script.write("  nmcli con up \"$WLAN0_CON\" 2>/dev/null\n")
-        script.write("  echo \"Reconnected wlan0 to $WLAN0_CON\"\n")
+        script.write("sleep 3\n")
+        # Restore integrated adapter to managed mode
+        script.write(f"sudo ip link set {other_iface} down 2>/dev/null\n")
+        script.write(f"sudo iw dev {other_iface} set type managed 2>/dev/null\n")
+        script.write(f"sudo ip link set {other_iface} up 2>/dev/null\n")
+        script.write("sleep 1\n")
+        # Reconnect to saved network
+        script.write("if [ -n \"$SAVED_CON\" ]; then\n")
+        script.write("  nmcli con up \"$SAVED_CON\" 2>/dev/null\n")
+        script.write("  echo \"Reconnected ${SAVED_CON} on {other_iface}\"\n")
+        script.write("else\n")
+        # If no saved connection, try to reconnect to any known network
+        script.write(f"  nmcli dev connect {other_iface} 2>/dev/null\n")
+        script.write(f"  echo 'Reconnected {other_iface}'\n")
         script.write("fi\n\n")
 
-        # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
-        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
+        script.write("echo\necho 'Done.'\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
