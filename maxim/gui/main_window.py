@@ -1089,6 +1089,9 @@ class MaximWindow(QMainWindow):
         self.terminal.appendPlainText(f"  Scan + capture → external terminal")
         self.terminal.appendPlainText(f"  Cracking → this output window\n")
 
+        # Reset guard flag
+        self._hs_processing = False
+
         # Clean signal file
         try:
             os.remove(signal_file)
@@ -1122,9 +1125,22 @@ class MaximWindow(QMainWindow):
         script.write(f"    LINE=$(grep -i '{essid}' '{scan_file}-01.csv' | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
         script.write("    if [ -n \"$LINE\" ]; then\n")
         script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("      CHANNEL=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        script.write("      echo \"Found: BSSID=$BSSID Channel=$CHANNEL\"\n")
-        script.write("      break\n")
+        script.write("      CH_RAW=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
+        # Validate channel is a positive integer 1-165; if not, try field 3 and 5
+        script.write("      CHANNEL=''\n")
+        script.write("      for FNUM in $CH_RAW $(echo \"$LINE\" | cut -d, -f3 | tr -d ' ') $(echo \"$LINE\" | cut -d, -f5 | tr -d ' ') $(echo \"$LINE\" | cut -d, -f6 | tr -d ' '); do\n")
+        script.write("        if echo \"$FNUM\" | grep -qE '^[0-9]+$' && [ \"$FNUM\" -ge 1 ] && [ \"$FNUM\" -le 165 ]; then\n")
+        script.write("          CHANNEL=$FNUM\n")
+        script.write("          break\n")
+        script.write("        fi\n")
+        script.write("      done\n")
+        script.write("      if [ -n \"$CHANNEL\" ] && [ -n \"$BSSID\" ]; then\n")
+        script.write("        echo \"Found: BSSID=$BSSID Channel=$CHANNEL\"\n")
+        script.write("        break\n")
+        script.write("      else\n")
+        script.write("        echo \"Found entry but invalid channel ($CH_RAW), retrying...\"\n")
+        script.write("        BSSID=''\n")
+        script.write("      fi\n")
         script.write("    fi\n")
         script.write("  fi\n")
         script.write(f"  echo '{essid} not found yet...'\n")
@@ -1172,6 +1188,9 @@ class MaximWindow(QMainWindow):
     def _check_handshake_done(self):
         """Poll .cap files for valid handshake, then kill terminal and crack."""
         import glob
+        # Guard: prevent double-fire while processing
+        if getattr(self, '_hs_processing', False):
+            return
         essid_dir = getattr(self, '_hs_essid_dir', None)
         if not essid_dir:
             self._hs_poll_timer.stop()
@@ -1189,6 +1208,7 @@ class MaximWindow(QMainWindow):
             if content in ("FAILED", "NO_CAP"):
                 self._hs_poll_timer.stop()
                 self._hs_essid_dir = None
+                self._hs_processing = False
                 self.terminal.appendPlainText(f"\n[!] Capture failed.\n")
                 return
 
@@ -1204,6 +1224,7 @@ class MaximWindow(QMainWindow):
             return  # No valid handshake yet — keep polling
 
         # Valid handshake found — stop polling, kill external terminal, crack internally
+        self._hs_processing = True
         self._hs_poll_timer.stop()
         self._hs_essid_dir = None
 
@@ -1224,6 +1245,7 @@ class MaximWindow(QMainWindow):
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
         self.terminal.appendPlainText(f"  File: {cap_file}")
         self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._hs_processing = False
         self._analyze_file(cap_file)
 
     # ═══════════════════════════════════════
