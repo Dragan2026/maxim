@@ -1082,6 +1082,7 @@ class MaximWindow(QMainWindow):
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
+        capture_prefix = f"{essid_dir}/{safe_essid}"
         signal_file = self._HS_SIGNAL_FILE
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
