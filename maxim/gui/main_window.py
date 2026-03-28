@@ -1469,7 +1469,7 @@ class MaximWindow(QMainWindow):
             self._is_bruteforcing = True
             self.terminal.appendPlainText("\n\n  HASHCAT GPU BRUTE FORCE...\n\n")
             hm = hashcat_mode
-            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep ':'"
+            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep -v '^Hashfile' | grep -v 'Token length' | grep -v '^[*]' | grep -v '^$' | grep ':'"
 
             script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
             script.write("#!/bin/bash\n\n")
@@ -1631,12 +1631,12 @@ class MaximWindow(QMainWindow):
                 wordlists.insert(0, main_wl)
 
         if tool == "aircrack":
-            # Build a script that tries each wordlist with early exit
+            # aircrack-ng does NOT need sudo — it's a userspace tool
             script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_crack_')
             script.write("#!/bin/bash\n\n")
             for i, wl in enumerate(wordlists, 1):
                 script.write(f"echo ''\necho '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
-                script.write(f"sudo aircrack-ng -w '{wl}' '{filepath}'\n")
+                script.write(f"aircrack-ng -w '{wl}' '{filepath}'\n")
                 script.write(f"if [ $? -eq 0 ]; then\n  echo ''\n  echo '  KEY FOUND!'\n  exit 0\nfi\n\n")
             script.write("echo ''\necho '  Wordlists exhausted — no key found.'\n")
             script.close()
@@ -1669,7 +1669,8 @@ class MaximWindow(QMainWindow):
 
         elif tool == "hashcat":
             hm = hash_format
-            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep ':'"
+            # --show outputs "hash:password" lines; exclude error/status lines
+            check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep -v '^Hashfile' | grep -v 'Token length' | grep -v '^[*]' | grep -v '^$' | grep ':'"
 
             # Stage 1: first wordlist + rules
             script.write(f"echo ''\necho '  [1] Wordlist + rules: {os.path.basename(wordlists[0])}'\n")
