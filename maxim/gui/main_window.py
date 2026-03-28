@@ -1146,7 +1146,7 @@ class MaximWindow(QMainWindow):
         script.write("WLAN0_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep 'wlan0' | cut -d: -f1)\n\n")
 
         # Run wifite
-        script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 10\n\n")
+        script.write(f"sudo wifite -i {iface} --essid '{essid}' --kill --wpa --no-pmkid --num-deauths 10\n\n")
 
         # Restore NetworkManager + wlan0 connection after wifite finishes
         script.write("echo\necho 'Restoring network...'\n")
