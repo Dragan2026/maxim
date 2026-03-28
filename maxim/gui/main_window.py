@@ -1110,32 +1110,38 @@ class MaximWindow(QMainWindow):
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Monitor mode on wlan1 only — NO airmon-ng check kill
+        # ── SCAN in managed mode (no airmon, no airodump — they kill NetworkManager) ──
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
+        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
+        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
+        script.write("sleep 1\n\n")
 
-        # Quick silent scan to find BSSID+channel (no ncurses, output to /dev/null)
-        scan_csv = "/tmp/maxim_hscan"
-        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n")
+        # Use 'iw dev wlan1 scan' in managed mode — plain text, no ncurses, no kill
         script.write(f"echo 'Scanning for {essid}...'\n")
         script.write("BSSID=''\nCHANNEL=''\n")
-        script.write("for i in 1 2 3; do\n")
-        script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
-        script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
-        script.write("  if [ -n \"$CSV\" ]; then\n")
-        script.write(f"    LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write("    if [ -n \"$LINE\" ]; then\n")
-        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        script.write("      if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
-        script.write("        CHANNEL=$CH\n")
-        script.write("      fi\n")
-        script.write("    fi\n")
-        script.write("  fi\n")
-        script.write(f"  rm -f {scan_csv}-* 2>/dev/null\n")
-        script.write("  if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then break; fi\n")
-        script.write("  echo \"  Retry $i...\"\n")
+        script.write("for i in 1 2 3 4 5; do\n")
+        script.write(f"  echo \"  Attempt $i/5\"\n")
+        script.write(f"  SCAN=$(sudo iw dev {iface} scan 2>&1)\n")
+        # Parse iw scan output: find BSS block with matching SSID
+        script.write("  CURRENT_BSS=''\n  CURRENT_FREQ=''\n")
+        script.write("  while IFS= read -r line; do\n")
+        script.write("    case \"$line\" in\n")
+        script.write("      BSS\\ *) CURRENT_BSS=$(echo \"$line\" | grep -oE '[0-9a-f]{2}(:[0-9a-f]{2}){5}');;\n")
+        script.write("      *freq:*) CURRENT_FREQ=$(echo \"$line\" | grep -oE '[0-9]+');;\n")
+        script.write(f"      *SSID:\\ {essid}*)\n")
+        script.write("        if [ -n \"$CURRENT_BSS\" ] && [ -n \"$CURRENT_FREQ\" ]; then\n")
+        script.write("          BSSID=$CURRENT_BSS\n")
+        # freq to channel
+        script.write("          if [ \"$CURRENT_FREQ\" -le 2484 ] 2>/dev/null; then\n")
+        script.write("            CHANNEL=$(( (CURRENT_FREQ - 2407) / 5 ))\n")
+        script.write("          elif [ \"$CURRENT_FREQ\" -ge 5180 ] 2>/dev/null; then\n")
+        script.write("            CHANNEL=$(( (CURRENT_FREQ - 5000) / 5 ))\n")
+        script.write("          fi\n")
+        script.write("          break 2\n")  # break out of both while and for
+        script.write("        fi;;\n")
+        script.write("    esac\n")
+        script.write("  done <<< \"$SCAN\"\n")
+        script.write("  sleep 2\n")
         script.write("done\n\n")
 
         script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
@@ -1147,28 +1153,18 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
         script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
-        script.write("echo '  MAXIM auto-detects handshake and starts cracking.'\n")
+        script.write("echo '  No deauth — zero network disruption.'\n")
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # PMKID capture first (no deauth needed), then passive handshake capture as fallback
-        # hcxdumptool grabs PMKID directly from the AP — zero disruption
-        script.write("echo '  [*] Trying PMKID capture (no deauth)...'\n")
-        script.write(f"echo '$BSSID' | tr -d ':' > /tmp/maxim_filter.txt\n")
-        pmkid_file = f"{essid_dir}/pmkid.pcapng"
-        script.write(f"sudo timeout 30 hcxdumptool -i {iface} --filterlist_ap=/tmp/maxim_filter.txt --filtermode=2 -o '{pmkid_file}' 2>&1\n")
-        script.write(f"rm -f /tmp/maxim_filter.txt\n\n")
+        # ── Switch to monitor mode ONLY on wlan1 ──
+        script.write(f"sudo ip link set {iface} down\n")
+        script.write(f"sudo iw dev {iface} set type monitor\n")
+        script.write(f"sudo ip link set {iface} up\n\n")
 
-        # Check if we got a PMKID
-        script.write(f"if [ -f '{pmkid_file}' ] && [ -s '{pmkid_file}' ]; then\n")
-        script.write("  echo '  [+] PMKID captured!'\n")
-        script.write("else\n")
-        script.write("  echo '  [-] No PMKID, switching to passive handshake capture...'\n")
-        script.write("  echo '  Waiting for a client to connect/reconnect naturally.'\n")
-        script.write("  echo '  (Tip: toggle WiFi on a phone connected to this network)'\n")
-        script.write("  echo\n")
-        script.write(f"  sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n")
-        script.write("fi\n\n")
+        # Passive capture only — no deauth, no hcxdumptool, no airmon-ng
+        # Just airodump-ng listening on the exact channel+BSSID
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
 
         # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
