@@ -1119,73 +1119,107 @@ class MaximWindow(QMainWindow):
         script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
         script.write(f"echo \"[*] Monitor interface: $MON\"\necho ''\n\n")
 
-        # Step 2: Scan ALL networks silently (no ncurses), parse CSV, show clean table
+        # Step 2: Scan ALL networks — run airodump-ng in background, write CSV only
+        # We use a helper script so airodump gets its own process group
         script.write(f"echo '[2/3] Scanning for networks... (looking for: {essid})'\necho ''\n\n")
         script.write(f"BSSID=''\nCHANNEL=''\nESSID_FOUND=''\n")
+        # Write a small scan helper script that runs airodump in its own session
+        script.write(f"SCAN_SCRIPT=$(mktemp /tmp/maxim_scan_XXXX.sh)\n")
+        script.write(f"cat > $SCAN_SCRIPT << 'SCANEOF'\n")
+        script.write(f"#!/bin/bash\n")
+        script.write(f"# Run airodump with setsid so it gets its own terminal session\n")
+        script.write(f"exec setsid airodump-ng -w \"$1\" --output-format csv --write-interval 1 \"$2\" </dev/null >/dev/null 2>&1\n")
+        script.write(f"SCANEOF\n")
+        script.write(f"chmod +x $SCAN_SCRIPT\n\n")
+
         script.write(f"for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  rm -f {scan_file}-* 2>/dev/null\n")
-        # Run airodump silently — redirect ALL output so ncurses doesn't corrupt terminal
-        script.write(f"  sudo airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON >/dev/null 2>&1 &\n")
-        script.write(f"  SCAN_PID=$!\n")
-        script.write(f"  echo \"  Scanning... (attempt $ATTEMPT/10, 20 seconds)\"\n")
-        script.write(f"  sleep 20\n")
-        # Kill airodump properly (sudo process + children)
-        script.write(f"  sudo kill $SCAN_PID 2>/dev/null\n")
-        script.write(f"  sudo killall airodump-ng 2>/dev/null\n")
-        script.write(f"  wait $SCAN_PID 2>/dev/null\n")
-        script.write(f"  sleep 1\n\n")
-        # Parse CSV — use python one-liner for reliable CSV parsing (bash cut breaks on spaces in fields)
+        # Launch scan helper — setsid + </dev/null ensures no terminal interference
+        script.write(f"  sudo bash $SCAN_SCRIPT '{scan_file}' $MON &\n")
+        script.write(f"  echo \"  Scanning... (attempt $ATTEMPT/10, 25 seconds)\"\n")
+        script.write(f"  sleep 25\n")
+        script.write(f"  sudo pkill -f 'airodump-ng.*{scan_file}' 2>/dev/null\n")
+        script.write(f"  sleep 2\n\n")
+
+        # Parse + display using python (reliable CSV handling)
         script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
-        script.write(f"""    python3 -c "
-import csv, sys
-try:
-    rows = []
-    with open('{scan_file}-01.csv', 'r', errors='ignore') as f:
-        for line in f:
-            parts = [p.strip() for p in line.split(',')]
-            if len(parts) >= 14:
-                bssid = parts[0]
-                if len(bssid) == 17 and bssid.count(':') == 5:
-                    essid = parts[13].strip()
-                    ch = parts[3].strip()
-                    pwr = parts[8].strip()
-                    enc = parts[5].strip()
-                    rows.append((essid, bssid, ch, pwr, enc))
-    if rows:
-        print()
-        print('  NETWORK                          BSSID              CH   PWR  ENC')
-        print('  ' + '─' * 68)
-        for e, b, c, p, enc in rows:
-            marker = ' ◄◄ TARGET' if e.lower() == '{essid}'.lower() else ''
-            print(f'  {{e:<34}} {{b:<18}} {{c:<4}} {{p:<4}} {{enc:<6}}{{marker}}')
-        print('  ' + '─' * 68)
-        print()
-except Exception as ex:
-    print(f'  [!] CSV parse error: {{ex}}')
-" 2>/dev/null\n""")
-        # Now extract BSSID/channel for our target using python
-        script.write(f"""    eval $(python3 -c "
-import sys
-with open('{scan_file}-01.csv', 'r', errors='ignore') as f:
-    for line in f:
-        parts = [p.strip() for p in line.split(',')]
-        if len(parts) >= 14:
-            bssid = parts[0]
-            if len(bssid) == 17 and bssid.count(':') == 5:
-                essid = parts[13].strip()
-                if essid.lower() == '{essid}'.lower():
-                    print(f'BSSID={{bssid}} CHANNEL={{parts[3].strip()}} ESSID_FOUND=\\\"{{essid}}\\\"')
-                    break
-" 2>/dev/null)\n""")
+        # Single python script: parse, display table, and output target info
+        script.write("    RESULT=$(python3 << 'PYEOF'\n")
+        script.write(f"import sys\n")
+        script.write(f"target = '{essid}'.lower()\n")
+        script.write(f"rows = []\n")
+        script.write(f"found_bssid = ''\n")
+        script.write(f"found_channel = ''\n")
+        script.write(f"found_essid = ''\n")
+        script.write(f"station_section = False\n")
+        script.write(f"with open('{scan_file}-01.csv', 'r', errors='ignore') as f:\n")
+        script.write(f"    for line in f:\n")
+        script.write(f"        line = line.strip()\n")
+        script.write(f"        if not line:\n")
+        script.write(f"            continue\n")
+        script.write(f"        if line.startswith('Station MAC'):\n")
+        script.write(f"            station_section = True\n")
+        script.write(f"            continue\n")
+        script.write(f"        if station_section:\n")
+        script.write(f"            continue\n")
+        script.write(f"        parts = [p.strip() for p in line.split(',')]\n")
+        script.write(f"        if len(parts) < 14:\n")
+        script.write(f"            continue\n")
+        script.write(f"        bssid = parts[0]\n")
+        script.write(f"        if not (len(bssid) == 17 and bssid.count(':') == 5):\n")
+        script.write(f"            continue\n")
+        script.write(f"        try:\n")
+        script.write(f"            int(bssid.replace(':', ''), 16)\n")
+        script.write(f"        except ValueError:\n")
+        script.write(f"            continue\n")
+        script.write(f"        essid = parts[13].strip()\n")
+        script.write(f"        ch = parts[3].strip()\n")
+        script.write(f"        pwr = parts[8].strip()\n")
+        script.write(f"        enc = parts[5].strip()\n")
+        script.write(f"        rows.append((essid, bssid, ch, pwr, enc))\n")
+        script.write(f"        if essid.lower() == target:\n")
+        script.write(f"            found_bssid = bssid\n")
+        script.write(f"            found_channel = ch\n")
+        script.write(f"            found_essid = essid\n")
+        script.write(f"# Sort by power (strongest first)\n")
+        script.write(f"rows.sort(key=lambda r: int(r[3]) if r[3].lstrip('-').isdigit() else -100, reverse=True)\n")
+        script.write(f"if rows:\n")
+        script.write(f"    print(f'NETWORKS_FOUND={{len(rows)}}')\n")
+        script.write(f"    print('---TABLE---')\n")
+        script.write(f"    print(f'  {{\"NETWORK\":<34}} {{\"BSSID\":<18}} {{\"CH\":<4}} {{\"PWR\":<5}} {{\"ENC\"}}')\n")
+        script.write(f"    print('  ' + '-' * 72)\n")
+        script.write(f"    for e, b, c, p, enc in rows:\n")
+        script.write(f"        tag = '  << TARGET' if e.lower() == target else ''\n")
+        script.write(f"        name = e if e else '(hidden)'\n")
+        script.write(f"        print(f'  {{name:<34}} {{b:<18}} {{c:<4}} {{p:<5}} {{enc}}{{tag}}')\n")
+        script.write(f"    print('  ' + '-' * 72)\n")
+        script.write(f"    print(f'  Total: {{len(rows)}} networks')\n")
+        script.write(f"    print('---END---')\n")
+        script.write(f"if found_bssid:\n")
+        script.write(f"    print(f'TARGET={{found_bssid}}|{{found_channel}}|{{found_essid}}')\n")
+        script.write("PYEOF\n)\n\n")
+
+        # Display the table portion
+        script.write(f"    echo \"$RESULT\" | sed -n '/---TABLE---/,/---END---/p' | grep -v '\\-\\-\\-TABLE\\-\\-\\-' | grep -v '\\-\\-\\-END\\-\\-\\-'\n")
+        script.write(f"    echo ''\n\n")
+
+        # Extract target info
+        script.write(f"    TARGET_LINE=$(echo \"$RESULT\" | grep '^TARGET=')\n")
+        script.write(f"    if [ -n \"$TARGET_LINE\" ]; then\n")
+        script.write(f"      BSSID=$(echo \"$TARGET_LINE\" | cut -d= -f2 | cut -d'|' -f1)\n")
+        script.write(f"      CHANNEL=$(echo \"$TARGET_LINE\" | cut -d'|' -f2)\n")
+        script.write(f"      ESSID_FOUND=$(echo \"$TARGET_LINE\" | cut -d'|' -f3)\n")
+        script.write(f"    fi\n")
         script.write(f"  fi\n\n")
         script.write(f"  if [ -n \"$BSSID\" ]; then\n")
-        script.write(f"    echo \"  [*] TARGET FOUND: $ESSID_FOUND  ($BSSID)  Channel: $CHANNEL\"\n")
+        script.write(f"    echo \"  [*] TARGET: $ESSID_FOUND  |  BSSID: $BSSID  |  Channel: $CHANNEL\"\n")
+        script.write(f"    echo ''\n")
         script.write(f"    break\n")
         script.write(f"  fi\n")
         script.write(f"  echo \"  [*] '{essid}' not found yet, retrying...\"\n")
         script.write(f"  echo ''\n")
         script.write(f"done\n\n")
-        script.write(f"rm -f {scan_file}-* 2>/dev/null\n\n")
+        script.write(f"rm -f {scan_file}-* $SCAN_SCRIPT 2>/dev/null\n\n")
         script.write(f"if [ -z \"$BSSID\" ]; then\n")
         script.write(f"  echo '[!] Could not find network: {essid}'\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
