@@ -1292,6 +1292,18 @@ class MaximWindow(QMainWindow):
                     pass
             self.runner._terminal_proc = None
 
+        # Restore NetworkManager + integrated adapter (wifite killed it)
+        def _restore_network():
+            subprocess.run("sudo systemctl start NetworkManager", shell=True, timeout=10)
+            time.sleep(2)
+            # Reconnect integrated adapter (wlan1)
+            subprocess.run("sudo ip link set wlan1 down 2>/dev/null", shell=True, timeout=5)
+            subprocess.run("sudo iw dev wlan1 set type managed 2>/dev/null", shell=True, timeout=5)
+            subprocess.run("sudo ip link set wlan1 up 2>/dev/null", shell=True, timeout=5)
+            time.sleep(1)
+            subprocess.run("nmcli dev connect wlan1 2>/dev/null", shell=True, timeout=10)
+        threading.Thread(target=_restore_network, daemon=True).start()
+
         # Copy the .cap into the ESSID subfolder so it's organized
         import shutil
         essid_dir = getattr(self, '_hs_essid_dir_path', '')
