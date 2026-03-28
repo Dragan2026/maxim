@@ -1127,7 +1127,7 @@ class MaximWindow(QMainWindow):
         script.write(f"for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  rm -f {scan_file}-* 2>/dev/null\n\n")
         # Run airodump-ng in FOREGROUND with timeout — it gets the real terminal it needs
-        script.write(f"  sudo timeout 25 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON 2>/dev/null || true\n\n")
+        script.write(f"  sudo timeout 25 airodump-ng --essid '{essid}' -w '{scan_file}' --output-format csv --write-interval 1 $MON 2>/dev/null || true\n\n")
         # After timeout, clear screen and show our clean parsed table
         script.write(f"  clear\n")
         script.write(f"  echo '══════════════════════════════════════════'\n")
