@@ -1175,42 +1175,60 @@ class MaximWindow(QMainWindow):
         # Open external terminal — GUI stays responsive
         self.runner.run_in_terminal(f"bash '{script.name}'")
 
-        # Start polling for the signal file — when capture is done, crack in internal output
+        # Poll for .cap file OR signal file — whichever appears first
         self._hs_essid_dir = essid_dir
+        self._hs_cap_seen = set()
+        # Record existing .cap files so we only trigger on NEW ones
+        import glob
+        for f in glob.glob(f"{essid_dir}/*.cap"):
+            self._hs_cap_seen.add(f)
+
         self._hs_poll_timer = QTimer()
         self._hs_poll_timer.timeout.connect(self._check_handshake_done)
-        self._hs_poll_timer.start(3000)  # Check every 3 seconds
+        self._hs_poll_timer.start(2000)  # Check every 2 seconds
 
     def _check_handshake_done(self):
-        """Poll for handshake capture completion, then crack in internal output."""
-        signal_file = self._HS_SIGNAL_FILE
-        if not os.path.exists(signal_file):
-            return  # Still capturing
-
-        # Stop polling
-        self._hs_poll_timer.stop()
-
-        try:
-            with open(signal_file, 'r') as f:
-                content = f.read().strip()
-        except Exception:
+        """Poll for new .cap file in essid dir, then crack in internal output."""
+        import glob
+        essid_dir = getattr(self, '_hs_essid_dir', None)
+        if not essid_dir:
+            self._hs_poll_timer.stop()
             return
-        finally:
+
+        # Method 1: Check signal file
+        signal_file = self._HS_SIGNAL_FILE
+        cap_file = None
+
+        if os.path.exists(signal_file):
             try:
+                with open(signal_file, 'r') as f:
+                    content = f.read().strip()
                 os.remove(signal_file)
             except Exception:
-                pass
+                content = ""
 
-        if content == "FAILED" or content == "NO_CAP":
-            self.terminal.appendPlainText(f"\n[!] Handshake capture failed — no .cap file to crack.\n")
-            return
+            if content and content not in ("FAILED", "NO_CAP") and os.path.exists(content):
+                cap_file = content
+            elif content in ("FAILED", "NO_CAP"):
+                self._hs_poll_timer.stop()
+                self.terminal.appendPlainText(f"\n[!] Handshake capture failed — no .cap file to crack.\n")
+                return
 
-        cap_file = content
-        if not os.path.exists(cap_file):
-            self.terminal.appendPlainText(f"\n[!] Cap file not found: {cap_file}\n")
-            return
+        # Method 2: Check for new .cap files in the essid directory
+        if not cap_file:
+            current_caps = set(glob.glob(f"{essid_dir}/*.cap"))
+            new_caps = current_caps - self._hs_cap_seen
+            if new_caps:
+                # Pick the newest one
+                cap_file = max(new_caps, key=os.path.getmtime)
 
-        # Crack in internal output using _analyze_file (which does gago→rockyou→all others)
+        if not cap_file:
+            return  # Still waiting
+
+        # Found it — stop polling and crack
+        self._hs_poll_timer.stop()
+        self._hs_essid_dir = None
+
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
         self.terminal.appendPlainText(f"  File: {cap_file}")
