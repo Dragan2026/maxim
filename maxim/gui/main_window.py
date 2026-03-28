@@ -1078,39 +1078,9 @@ class MaximWindow(QMainWindow):
         Auto-detects USB WiFi adapter. Integrated adapter NEVER touched."""
         import tempfile
 
-        # Auto-detect USB WiFi adapter (not the integrated one)
-        # USB adapters show up under /sys/class/net/*/device -> USB path
-        iface = None
-        try:
-            for netdev in sorted(os.listdir('/sys/class/net')):
-                if not netdev.startswith('wlan'):
-                    continue
-                devpath = os.path.realpath(f'/sys/class/net/{netdev}/device')
-                if '/usb' in devpath:
-                    iface = netdev
-                    break
-        except Exception:
-            pass
-        if not iface:
-            # Fallback: pick whichever wlan is NOT connected to a network
-            try:
-                result = subprocess.run('nmcli -t -f DEVICE,STATE dev status', shell=True, capture_output=True, text=True)
-                connected = set()
-                all_wlan = []
-                for line in result.stdout.strip().split('\n'):
-                    parts = line.split(':')
-                    if len(parts) >= 2 and parts[0].startswith('wlan'):
-                        all_wlan.append(parts[0])
-                        if 'connected' in parts[1]:
-                            connected.add(parts[0])
-                for w in all_wlan:
-                    if w not in connected:
-                        iface = w
-                        break
-            except Exception:
-                pass
-        if not iface:
-            iface = "wlan1"  # last resort fallback
+        # wlan0 = USB WiFi adapter (monitor mode / attack)
+        # wlan1 = integrated adapter (connected to network — NEVER touch)
+        iface = "wlan0"
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
@@ -1134,18 +1104,8 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # Find the OTHER (non-USB / integrated) adapter to save+restore its connection
-        other_iface = None
-        try:
-            for netdev in sorted(os.listdir('/sys/class/net')):
-                if not netdev.startswith('wlan') or netdev == iface:
-                    continue
-                other_iface = netdev
-                break
-        except Exception:
-            pass
-        if not other_iface:
-            other_iface = "wlan1" if iface == "wlan0" else "wlan0"
+        # wlan1 = integrated adapter (connected — never touch for monitor mode)
+        other_iface = "wlan1"
 
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
