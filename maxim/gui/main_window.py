@@ -30,6 +30,8 @@ from maxim.tools.tool_registry import (
     TOOLS, get_tool_by_name, get_all_packages
 )
 
+import shlex
+
 
 class DropTerminal(QPlainTextEdit):
     """Terminal that accepts drag & drop of files."""
@@ -115,6 +117,17 @@ class AIStreamSignal(QThread):
             self.finished.emit(response)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
+
+
+def _sanitize_shell_arg(value):
+    """Sanitize a value for safe use in shell commands.
+    Rejects values containing shell metacharacters that could enable injection."""
+    # Strip whitespace
+    value = value.strip().strip('"\'')
+    # Block shell metacharacters — only allow safe chars for IPs, domains, file paths
+    if re.search(r'[;&|`$(){}!\\\n\r]', value):
+        return None
+    return value
 
 
 class MaximWindow(QMainWindow):
@@ -594,6 +607,11 @@ class MaximWindow(QMainWindow):
         target_port = port_match.group(1) if port_match else None
 
         if target_ip:
+            target_ip = _sanitize_shell_arg(target_ip)
+            if not target_ip:
+                self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+                return
+
             # ── Ping attacks ──
             if re.search(r'ping\s+(of\s+)?death', q_lower):
                 self._execute_command(f"sudo ping -s 65500 -c 100 {target_ip}")
@@ -689,12 +707,34 @@ class MaximWindow(QMainWindow):
                     self._execute_command(f"sudo hping3 -S --flood -V -p {port} {target_ip}")
                 return
 
-        # 3. Raw command (starts with a known tool binary)
+        # 3. Vulnerability scan pipeline
+        vuln_match = re.search(
+            r'(?:find|scan\s+for|check\s+for|search\s+for|run|detect|discover|enumerate)\s+'
+            r'(?:all\s+)?(?:vulns?|vulnerabilit(?:y|ies)|exploits?|weaknesses?|security\s+(?:holes?|issues?|flaws?))'
+            r'(?:\s+(?:on|for|against|in|at|of))?\s+'
+            r'(\S+)',
+            q_lower
+        )
+        if not vuln_match:
+            vuln_match = re.search(
+                r'(?:vulns?|vulnerabilit(?:y|ies)|exploits?|pentest|pen\s+test|full\s+scan|security\s+(?:audit|scan|assessment))'
+                r'\s+(?:on|for|against|of|at)\s+(\S+)',
+                q_lower
+            )
+        if vuln_match:
+            target = vuln_match.group(1).strip().strip('"\'')
+            if _sanitize_shell_arg(target):
+                self._full_vuln_scan(target)
+            else:
+                self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+            return
+
+        # 4. Raw command (starts with a known tool binary)
         if any(q_lower.startswith(p) for p in raw_prefixes):
             self._execute_command(query)
             return
 
-        # 4. Handshake capture workflow
+        # 5. Handshake capture workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
             handshake_match = re.search(r'handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
@@ -703,7 +743,7 @@ class MaximWindow(QMainWindow):
             self._capture_handshake(essid)
             return
 
-        # 3. Everything else → AI decides what to do
+        # 6. Everything else → AI decides what to do
         if self.ai and self.ai.is_available():
             self._ai_execute(query)
         else:
@@ -873,67 +913,171 @@ class MaximWindow(QMainWindow):
         return cmd
 
     def _start_monitor_mode(self, iface, keep_iface):
-        """Start monitor mode on selected adapter, keep other adapter working.
-        Returns the monitor interface name."""
+        """Start monitor mode on selected adapter using iw (safe — never kills NetworkManager).
+        wlan0 stays untouched. Returns the monitor interface name."""
         self.terminal.appendPlainText(f"\n[WiFi] Starting monitor mode on {iface}...\n")
         if keep_iface:
-            self.terminal.appendPlainText(f"[WiFi] Keeping {keep_iface} for regular WiFi.\n")
+            self.terminal.appendPlainText(f"[WiFi] {keep_iface} will NOT be touched.\n")
 
-        # Use the process runner (has sudo password) for all commands
-        # Step 1: Kill interfering processes
-        code, out, _ = self.runner.run(f"sudo airmon-ng check kill")
-        if out.strip():
-            self.terminal.appendPlainText(out)
+        # Use ip/iw to put adapter in monitor mode — does NOT kill NetworkManager
+        self.runner.run(f"sudo ip link set {iface} down")
+        self.runner.run(f"sudo iw dev {iface} set type monitor")
+        code, out, _ = self.runner.run(f"sudo ip link set {iface} up")
 
-        # Step 2: Start monitor mode
-        code, out, _ = self.runner.run(f"sudo airmon-ng start {iface}")
-        if out.strip():
-            self.terminal.appendPlainText(out)
-
-        # Step 3: Detect actual monitor interface name
-        # Use iw dev / iwconfig to find which interface is actually in monitor mode
-        mon_name = self._detect_monitor_name(iface)
-
-        # Step 4: Restart NetworkManager so the other adapter reconnects
-        if keep_iface:
-            self.runner.run("sudo systemctl restart NetworkManager")
-            self.terminal.appendPlainText(f"[WiFi] NetworkManager restarted — {keep_iface} reconnecting.\n")
+        # Verify monitor mode
+        code, out, _ = self.runner.run(f"sudo iw dev {iface} info")
+        if "monitor" in out.lower():
+            self.terminal.appendPlainText(f"[WiFi] {iface} is now in monitor mode.\n")
+            mon_name = iface
+        else:
+            # Fallback: try airmon-ng (without check kill)
+            self.terminal.appendPlainText(f"[WiFi] iw failed, trying airmon-ng...\n")
+            code, out, _ = self.runner.run(f"sudo airmon-ng start {iface}")
+            if out.strip():
+                self.terminal.appendPlainText(out)
+            mon_name = self._detect_monitor_name(iface)
 
         self.terminal.appendPlainText(f"[WiFi] Monitor interface: {mon_name}\n\n")
         return mon_name
 
     def _restore_network(self):
-        """Restore network after monitor mode and reset adapter selection."""
+        """Restore wlan1 from monitor mode back to managed. Never touches wlan0."""
         mon = getattr(self, '_monitor_iface_name', None)
-        iface = getattr(self, '_selected_wifi_iface', 'wlan0')
         self._wifi_adapter_selected = False
         self._monitor_iface_name = None
-        stop_cmd = f"sudo airmon-ng stop {mon} 2>/dev/null; " if mon else ""
+        # Restore wlan1 to managed mode using iw (safe — doesn't affect wlan0)
+        restore_iface = mon or "wlan1"
         self._execute_command(
-            f"{stop_cmd}"
-            f"sudo systemctl restart NetworkManager; "
-            f"sudo systemctl restart wpa_supplicant; "
-            f"sudo dhclient"
+            f"sudo ip link set {restore_iface} down 2>/dev/null; "
+            f"sudo iw dev {restore_iface} set type managed 2>/dev/null; "
+            f"sudo ip link set {restore_iface} up 2>/dev/null; "
+            f"echo '[OK] {restore_iface} restored to managed mode'"
         )
+
+    # ═══════════════════════════════════════
+    #  VULNERABILITY SCAN PIPELINE
+    # ═══════════════════════════════════════
+
+    def _full_vuln_scan(self, target):
+        """Run comprehensive vulnerability scan: nmap + nikto + gobuster + whatweb + searchsploit → AI analysis."""
+        import tempfile
+
+        target = _sanitize_shell_arg(target)
+        if not target:
+            self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+            return
+
+        report_dir = "/tmp/maxim_vulnscan"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_target = re.sub(r'[^a-zA-Z0-9._-]', '_', target)
+        report_file = f"{report_dir}/{safe_target}_{ts}.txt"
+
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText(f"  FULL VULNERABILITY SCAN — {target}")
+        self.terminal.appendPlainText(f"{'═'*60}")
+        self.terminal.appendPlainText(f"  Tools: nmap, nikto, gobuster, whatweb, searchsploit")
+        self.terminal.appendPlainText(f"  Report: {report_file}")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+
+        script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_vulnscan_')
+        script.write("#!/bin/bash\n\n")
+        script.write(f"mkdir -p '{report_dir}'\n")
+        script.write(f"REPORT='{report_file}'\n")
+        script.write(f"TARGET='{target}'\n\n")
+
+        script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n")
+        script.write("echo '  MAXIM VULNERABILITY SCAN REPORT' | tee -a \"$REPORT\"\n")
+        script.write(f"echo '  Target: {target}' | tee -a \"$REPORT\"\n")
+        script.write(f"echo '  Date: $(date)' | tee -a \"$REPORT\"\n")
+        script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n\n")
+
+        # Stage 1: Nmap service/version/OS detection
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [1/7] NMAP — Service & Version Detection' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"sudo nmap -sV -sC -O -T4 --open -oN '{report_dir}/nmap_services.txt' \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
+
+        # Stage 2: Nmap vulnerability scripts
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [2/7] NMAP — Vulnerability Scripts' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"sudo nmap --script vuln -T4 \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
+
+        # Stage 3: Whatweb (tech fingerprinting)
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [3/7] WHATWEB — Technology Fingerprinting' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"whatweb -a 3 \"$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] whatweb not available' | tee -a \"$REPORT\"\n\n")
+
+        # Stage 4: Nikto (web vulnerability scanner)
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [4/7] NIKTO — Web Vulnerability Scanner' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"nikto -h \"$TARGET\" -C all -maxtime 300 2>&1 | tee -a \"$REPORT\" || echo '  [!] nikto not available' | tee -a \"$REPORT\"\n\n")
+
+        # Stage 5: Gobuster (directory enumeration)
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [5/7] GOBUSTER — Directory Enumeration' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("WORDLIST='/usr/share/wordlists/dirb/common.txt'\n")
+        script.write("if [ ! -f \"$WORDLIST\" ]; then WORDLIST='/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt'; fi\n")
+        script.write(f"gobuster dir -u \"http://$TARGET\" -w \"$WORDLIST\" -t 50 -q --timeout 10s 2>&1 | head -100 | tee -a \"$REPORT\" || echo '  [!] gobuster not available' | tee -a \"$REPORT\"\n\n")
+
+        # Stage 6: Searchsploit (exploit lookup from nmap results)
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [6/7] SEARCHSPLOIT — Known Exploits Lookup' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"if [ -f '{report_dir}/nmap_services.txt' ]; then\n")
+        script.write(f"  searchsploit --nmap '{report_dir}/nmap_services.txt' 2>&1 | tee -a \"$REPORT\" || echo '  [!] searchsploit not available' | tee -a \"$REPORT\"\n")
+        script.write("else\n")
+        script.write("  echo '  [!] No nmap output to search' | tee -a \"$REPORT\"\n")
+        script.write("fi\n\n")
+
+        # Stage 7: SSL/TLS check
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [7/7] SSL/TLS — Certificate & Cipher Check' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"sslscan \"$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] sslscan not available' | tee -a \"$REPORT\"\n\n")
+
+        # Final summary
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n")
+        script.write("echo '  SCAN COMPLETE' | tee -a \"$REPORT\"\n")
+        script.write(f"echo '  Full report saved: {report_file}' | tee -a \"$REPORT\"\n")
+        script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n")
+
+        script.close()
+        os.chmod(script.name, 0o755)
+
+        # Store report path for AI analysis after scan completes
+        self._vulnscan_report = report_file
+        self._vulnscan_target = target
+        self._vulnscan_script = script.name
+
+        self._execute_command(f"bash '{script.name}'")
 
     def _capture_handshake(self, essid):
         """Full handshake capture workflow: scan → find target → capture → save to MAXIMHASH.
-        Always uses external adapter (wlan1). No popups."""
+        Uses wlan1 (external) for monitor mode. wlan0 (internal) stays untouched."""
         import tempfile
 
-        # Always use wlan1 for monitor mode
-        mon = "wlan1"
+        # wlan1 = external USB adapter for monitor mode
+        # wlan0 = internal WiFi — NEVER touch it
+        iface = "wlan1"
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         os.makedirs(out_dir, exist_ok=True)
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
-        self.terminal.appendPlainText(f"  Interface: {mon}")
+        self.terminal.appendPlainText(f"  Monitor: {iface}  (wlan0 untouched)")
         self.terminal.appendPlainText(f"{'═'*60}\n")
-
-        # Ensure monitor mode on wlan1
-        self.terminal.appendPlainText(f"[1/5] Enabling monitor mode on {mon}...\n")
-        QApplication.processEvents()
 
         # Build sudo prefix
         sudo_prefix = "sudo"
@@ -941,25 +1085,47 @@ class MaximWindow(QMainWindow):
             pw = self.runner._escape_pw()
             sudo_prefix = f"echo '{pw}' | sudo -S"
 
-        # Kill interfering processes and start monitor mode
-        subprocess.run(f"{sudo_prefix} airmon-ng check kill 2>/dev/null",
-                      shell=True, capture_output=True, timeout=10)
-        subprocess.run(f"{sudo_prefix} airmon-ng start {mon} 2>/dev/null",
-                      shell=True, capture_output=True, timeout=10)
-        # Restart NetworkManager for wlan0
-        subprocess.run(f"{sudo_prefix} systemctl restart NetworkManager 2>/dev/null",
-                      shell=True, capture_output=True, timeout=10)
+        # Step 1: Put wlan1 into monitor mode WITHOUT killing NetworkManager
+        # Do NOT use airmon-ng check kill — it kills NetworkManager and drops wlan0
+        self.terminal.appendPlainText(f"[1/5] Enabling monitor mode on {iface}...\n")
+        QApplication.processEvents()
 
+        # Method: use ip/iw directly to avoid airmon-ng's aggressive process killing
+        subprocess.run(f"{sudo_prefix} ip link set {iface} down 2>/dev/null",
+                      shell=True, capture_output=True, timeout=5)
+        subprocess.run(f"{sudo_prefix} iw dev {iface} set type monitor 2>/dev/null",
+                      shell=True, capture_output=True, timeout=5)
+        subprocess.run(f"{sudo_prefix} ip link set {iface} up 2>/dev/null",
+                      shell=True, capture_output=True, timeout=5)
+
+        # Verify monitor mode is active
+        result = subprocess.run(f"{sudo_prefix} iw dev {iface} info 2>/dev/null",
+                               shell=True, capture_output=True, text=True, timeout=5)
+        if "monitor" not in result.stdout.lower():
+            # Fallback: try airmon-ng but only on wlan1, no check kill
+            self.terminal.appendPlainText(f"[*] iw failed, trying airmon-ng start {iface}...\n")
+            QApplication.processEvents()
+            subprocess.run(f"{sudo_prefix} airmon-ng start {iface} 2>/dev/null",
+                          shell=True, capture_output=True, timeout=10)
+
+        # Detect actual monitor interface name (wlan1 or wlan1mon)
+        mon = iface
+        result = subprocess.run(f"iw dev 2>/dev/null | grep -E 'Interface|type' ",
+                               shell=True, capture_output=True, text=True, timeout=5)
+        if f"{iface}mon" in result.stdout:
+            mon = f"{iface}mon"
+        self.terminal.appendPlainText(f"[*] Monitor interface: {mon}\n")
+
+        # Step 2: Scan for target ESSID
         self.terminal.appendPlainText(f"[2/5] Scanning for '{essid}'... (20 seconds)\n")
         QApplication.processEvents()
 
-        # Scan all networks for 20 seconds
         scan_file = "/tmp/maxim_hscan"
         subprocess.run(f"rm -f {scan_file}-* 2>/dev/null", shell=True)
         try:
             subprocess.run(
-                f"{sudo_prefix} timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon} 2>/dev/null",
-                shell=True, capture_output=True, timeout=25
+                f"{sudo_prefix} timeout 20 airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 {mon}",
+                shell=True, capture_output=True, text=True, timeout=25
             )
         except subprocess.TimeoutExpired:
             pass
@@ -1166,6 +1332,60 @@ class MaximWindow(QMainWindow):
             )
             if not found:
                 self._offer_brute_force(cmd)
+
+        # If vuln scan finished, trigger AI analysis of report
+        if "maxim_vulnscan_" in cmd and hasattr(self, '_vulnscan_report'):
+            self._analyze_vulnscan_report()
+
+    def _analyze_vulnscan_report(self):
+        """Read the vuln scan report and ask AI to provide exploitation steps."""
+        report_path = getattr(self, '_vulnscan_report', None)
+        target = getattr(self, '_vulnscan_target', 'unknown')
+        if not report_path:
+            return
+
+        # Clean up state
+        del self._vulnscan_report
+        del self._vulnscan_target
+
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText("  AI ANALYZING SCAN RESULTS...")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+        QApplication.processEvents()
+
+        # Read the report file
+        try:
+            code, report_content, _ = self.runner.run(f"cat {shlex.quote(report_path)} 2>/dev/null")
+            if not report_content or len(report_content.strip()) < 50:
+                self.terminal.appendPlainText("[!] Report is empty or too short for analysis.\n")
+                return
+        except Exception:
+            self.terminal.appendPlainText("[!] Could not read scan report.\n")
+            return
+
+        # Truncate if too long for AI context
+        if len(report_content) > 12000:
+            report_content = report_content[:12000] + "\n\n[... truncated for AI analysis ...]"
+
+        if self.ai and self.ai.is_available():
+            prompt = (
+                f"I just ran a full vulnerability scan on target: {target}\n\n"
+                f"Here are the complete scan results:\n\n{report_content}\n\n"
+                f"Based on these results, provide:\n"
+                f"1. CRITICAL FINDINGS — list every vulnerability found, rated by severity (Critical/High/Medium/Low)\n"
+                f"2. OPEN PORTS & SERVICES — summary with version info\n"
+                f"3. EXPLOITATION STEPS — for each vulnerability found, give exact commands and steps to exploit it\n"
+                f"4. RECOMMENDED TOOLS — specific Metasploit modules, exploit-db references, or manual exploitation commands\n"
+                f"5. POST-EXPLOITATION — what to do after gaining access\n\n"
+                f"Be specific with exact commands. This is for authorized penetration testing."
+            )
+            self._ai_execute(prompt)
+        else:
+            self.terminal.appendPlainText(
+                "[!] AI not configured — cannot analyze results automatically.\n"
+                "    Set up AI: AI menu > Set API Key\n"
+                f"    Raw report saved at: {report_path}\n"
+            )
 
     def _offer_brute_force(self, original_cmd):
         """No password found — offer brute force. Detects tool type and uses fastest method."""
@@ -1378,6 +1598,14 @@ class MaximWindow(QMainWindow):
 
     def _get_wordlists(self):
         """Return all existing wordlists: gago first, rockyou second, then extras."""
+        # Auto-unzip rockyou.txt if only .gz exists
+        rockyou = "/usr/share/wordlists/rockyou.txt"
+        if not os.path.exists(rockyou) and os.path.exists(rockyou + ".gz"):
+            try:
+                subprocess.run(f"sudo gunzip -k '{rockyou}.gz'", shell=True, timeout=30)
+            except Exception:
+                pass
+
         existing = []
         for wl in self.WORDLISTS:
             if os.path.exists(wl):
@@ -1578,10 +1806,12 @@ class MaximWindow(QMainWindow):
             "Wordlists (*.txt *.lst);;All Files (*)")
         if filepath:
             fname = os.path.basename(filepath)
+            safe_src = shlex.quote(filepath)
+            safe_dest = shlex.quote(f"/usr/share/wordlists/{fname}")
             self._execute_command(
-                f"sudo cp '{filepath}' '/usr/share/wordlists/{fname}' && "
+                f"sudo cp {safe_src} {safe_dest} && "
                 f"echo 'Added wordlist: /usr/share/wordlists/{fname}' && "
-                f"wc -l '/usr/share/wordlists/{fname}'"
+                f"wc -l {safe_dest}"
             )
 
     def _add_word_to_wordlist(self, filepath):
@@ -1589,10 +1819,12 @@ class MaximWindow(QMainWindow):
         word, ok = QInputDialog.getText(self, "Add Word",
             f"Enter word/password to add to:\n{filepath}")
         if ok and word.strip():
+            safe_word = shlex.quote(word.strip())
+            safe_path = shlex.quote(filepath)
             self._execute_command(
-                f"sudo gzip -d '{filepath}.gz' 2>/dev/null; "
-                f"echo '{word.strip()}' | sudo tee -a '{filepath}' && "
-                f"echo 'Added: {word.strip()}'"
+                f"sudo gzip -d {safe_path}.gz 2>/dev/null; "
+                f"echo {safe_word} | sudo tee -a {safe_path} && "
+                f"echo 'Added word to wordlist'"
             )
 
     def _add_word_to_custom_wordlist(self):
