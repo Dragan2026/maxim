@@ -1150,11 +1150,10 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Background: broadcast deauth to AP only (aireplay-ng -a BSSID, no -c)
-        # This deauths clients of MAX only, does NOT affect other networks
-        script.write("(\n  sleep 3\n  for j in $(seq 1 30); do\n")
-        script.write(f"    sudo aireplay-ng --deauth 5 -a $BSSID {iface} >/dev/null 2>&1\n")
-        script.write("    sleep 5\n  done\n) &\n\n")
+        # No deauth — passive capture only. Handshake happens when any client
+        # reconnects naturally. Zero disruption to any network.
+        script.write("echo '  Passive mode — waiting for a client to reconnect...'\n")
+        script.write("echo '  (No deauth — your connections stay alive)'\necho\n\n")
 
         # Foreground: capture on the target channel+BSSID
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
