@@ -129,6 +129,7 @@ class MaximWindow(QMainWindow):
         self.ai = None
         self.current_thread = None
         self._running = False
+        self._ghost_mode = False
 
         self._build_ui()
         self._build_menu()
@@ -185,6 +186,11 @@ class MaximWindow(QMainWindow):
         subtitle.setStyleSheet("color: #52525b; font-size: 14px; margin-left: 16px;")
         hlay.addWidget(subtitle)
         hlay.addStretch()
+
+        self.ghost_status = QLabel("")
+        self.ghost_status.setStyleSheet("color: #52525b; font-size: 13px; padding: 4px 14px; background: #18181b; border-radius: 12px;")
+        self.ghost_status.hide()
+        hlay.addWidget(self.ghost_status)
 
         self.ai_status = QLabel("AI: Loading...")
         self.ai_status.setStyleSheet("color: #52525b; font-size: 13px; padding: 4px 14px; background: #18181b; border-radius: 12px;")
@@ -305,6 +311,17 @@ class MaximWindow(QMainWindow):
         clear_btn.clicked.connect(self._clear_terminal)
         qbar.addWidget(clear_btn)
 
+        self.ghost_btn = QPushButton("Ghost Mode: OFF")
+        self.ghost_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: 1px solid #27272a; color: #52525b;
+                border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 600;
+            }
+            QPushButton:hover { border-color: #8b5cf6; color: #8b5cf6; }
+        """)
+        self.ghost_btn.clicked.connect(self._toggle_ghost_mode)
+        qbar.addWidget(self.ghost_btn)
+
         qbar.addStretch()
         play.addLayout(qbar)
 
@@ -408,6 +425,20 @@ class MaximWindow(QMainWindow):
         tools_menu.addSeparator()
         tools_menu.addAction("Start Tor", lambda: self._execute_command("sudo service tor start"))
         tools_menu.addAction("Start PostgreSQL (MSF)", lambda: self._execute_command("sudo service postgresql start"))
+        tools_menu.addSeparator()
+        ghost_menu = tools_menu.addMenu("Ghost Mode")
+        ghost_menu.addAction("Toggle Ghost Mode", self._toggle_ghost_mode)
+        ghost_menu.addAction("New Tor Identity (new IP)", self._new_tor_identity)
+        ghost_menu.addAction("Check My IP", lambda: self._execute_command(
+            "echo '=== Real IP ===' && curl -s --max-time 5 ifconfig.me && echo '' && "
+            "echo '=== Tor IP ===' && proxychains4 -q curl -s --max-time 10 ifconfig.me 2>/dev/null && echo ''"
+        ))
+        ghost_menu.addAction("Randomize MAC (eth0)", lambda: self._execute_command(
+            "sudo ip link set eth0 down && sudo macchanger -r eth0 && sudo ip link set eth0 up"
+        ))
+        ghost_menu.addAction("Install Tor + Proxychains", lambda: self._execute_command(
+            "sudo apt-get install -y tor proxychains4 macchanger && sudo systemctl enable tor"
+        ))
 
         wordlist_menu = menubar.addMenu("Wordlists")
         wordlist_menu.addAction("Download SecLists (large)", lambda: self._execute_command(
@@ -1053,6 +1084,10 @@ class MaximWindow(QMainWindow):
             first_word = cmd.strip().split()[0] if cmd.strip() else ""
             if first_word in self.SUDO_TOOLS or as_root:
                 cmd = f"sudo {cmd}"
+
+        # Ghost Mode — wrap through proxychains if applicable
+        if self._should_proxy(cmd):
+            cmd = self._wrap_proxychains(cmd)
 
         # Reset brute force state for new crack commands
         is_crack = any(t in cmd for t in ["john ", "hashcat ", "aircrack-ng "])
@@ -1769,6 +1804,171 @@ class MaximWindow(QMainWindow):
         else:
             self.ai_status.setText(f"AI: {status}")
             self.ai_status.setStyleSheet("color: #facc15; font-size: 13px; padding: 4px 14px; background: #1c1917; border-radius: 12px;")
+
+    # ═══════════════════════════════════════
+    #  GHOST MODE (Tor + proxychains + MAC spoof)
+    # ═══════════════════════════════════════
+
+    # Tools that CANNOT go through proxychains (local/WiFi/hardware tools)
+    _NO_PROXY_TOOLS = {
+        "airmon-ng", "airodump-ng", "aireplay-ng", "aircrack-ng", "wifite",
+        "reaver", "wash", "macchanger", "ifconfig", "iwconfig", "ip",
+        "systemctl", "service", "apt-get", "apt", "dpkg", "john", "hashcat",
+        "crunch", "airbase-ng", "bettercap", "ettercap", "netdiscover",
+    }
+
+    def _toggle_ghost_mode(self):
+        if self._ghost_mode:
+            self._disable_ghost_mode()
+        else:
+            self._enable_ghost_mode()
+
+    def _enable_ghost_mode(self):
+        self._ghost_mode = True
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText("  GHOST MODE — ACTIVATING")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+        QApplication.processEvents()
+
+        # Step 1: Start Tor
+        self.terminal.appendPlainText("[1/4] Starting Tor service...\n")
+        QApplication.processEvents()
+        self.runner.run("sudo systemctl start tor")
+
+        # Step 2: Verify Tor is running
+        code, out, _ = self.runner.run("systemctl is-active tor")
+        if "active" not in out:
+            self.terminal.appendPlainText("[!] Tor failed to start. Installing...\n")
+            QApplication.processEvents()
+            self.runner.run("sudo apt-get install -y tor proxychains4")
+            self.runner.run("sudo systemctl start tor")
+
+        # Step 3: Configure proxychains for Tor
+        self.terminal.appendPlainText("[2/4] Configuring proxychains for Tor...\n")
+        QApplication.processEvents()
+        # Ensure proxychains uses Tor SOCKS5 on 9050
+        self.runner.run(
+            "sudo cp /etc/proxychains4.conf /etc/proxychains4.conf.bak 2>/dev/null; "
+            "sudo sed -i 's/^strict_chain/#strict_chain/' /etc/proxychains4.conf; "
+            "sudo sed -i 's/^#dynamic_chain/dynamic_chain/' /etc/proxychains4.conf; "
+            "grep -q 'socks5.*9050' /etc/proxychains4.conf || echo 'socks5 127.0.0.1 9050' | sudo tee -a /etc/proxychains4.conf"
+        )
+
+        # Step 4: Get Tor IP
+        self.terminal.appendPlainText("[3/4] Checking Tor exit IP...\n")
+        QApplication.processEvents()
+        code, real_ip, _ = self.runner.run("curl -s --max-time 5 ifconfig.me 2>/dev/null")
+        real_ip = real_ip.strip()
+        code, tor_ip, _ = self.runner.run("proxychains4 -q curl -s --max-time 15 ifconfig.me 2>/dev/null")
+        tor_ip = tor_ip.strip()
+
+        if tor_ip and tor_ip != real_ip:
+            self.terminal.appendPlainText(f"[4/4] Ghost Mode ACTIVE\n")
+            self.terminal.appendPlainText(f"  Real IP:  {real_ip} (hidden)\n")
+            self.terminal.appendPlainText(f"  Tor IP:   {tor_ip}\n")
+            self.terminal.appendPlainText(f"  All commands routed through Tor.\n")
+            self.terminal.appendPlainText(f"  Local/WiFi tools bypass proxy automatically.\n\n")
+
+            self.ghost_status.setText(f"GHOST: {tor_ip}")
+            self.ghost_status.setStyleSheet(
+                "color: #a78bfa; font-size: 13px; font-weight: bold; padding: 4px 14px; "
+                "background: #1e1033; border: 1px solid #7c3aed; border-radius: 12px;"
+            )
+            self.ghost_status.show()
+        else:
+            self.terminal.appendPlainText(f"[!] Tor connection failed — could not get Tor IP.\n")
+            self.terminal.appendPlainText(f"    Real IP: {real_ip}\n")
+            self.terminal.appendPlainText(f"    Tor returned: {tor_ip or '(empty)'}\n")
+            self.terminal.appendPlainText(f"    Check: sudo systemctl status tor\n\n")
+            self._ghost_mode = False
+            return
+
+        # Update button
+        self.ghost_btn.setText("Ghost Mode: ON")
+        self.ghost_btn.setStyleSheet("""
+            QPushButton {
+                background: #1e1033; border: 1px solid #7c3aed; color: #a78bfa;
+                border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 600;
+            }
+            QPushButton:hover { background: #2e1a4a; color: #c4b5fd; }
+        """)
+
+    def _new_tor_identity(self):
+        """Get a new Tor exit IP without restarting."""
+        self.terminal.appendPlainText("\n[Ghost] Requesting new Tor identity...\n")
+        QApplication.processEvents()
+        # Send NEWNYM signal to Tor control port
+        self.runner.run(
+            "echo -e 'AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT' | nc 127.0.0.1 9051 2>/dev/null || "
+            "sudo systemctl restart tor"
+        )
+        import time
+        time.sleep(2)
+        code, tor_ip, _ = self.runner.run("proxychains4 -q curl -s --max-time 15 ifconfig.me 2>/dev/null")
+        tor_ip = tor_ip.strip()
+        if tor_ip:
+            self.terminal.appendPlainText(f"[Ghost] New Tor IP: {tor_ip}\n")
+            if self._ghost_mode:
+                self.ghost_status.setText(f"GHOST: {tor_ip}")
+        else:
+            self.terminal.appendPlainText("[Ghost] Could not verify new IP.\n")
+
+    def _disable_ghost_mode(self):
+        self._ghost_mode = False
+        self.terminal.appendPlainText("\n[Ghost Mode] Disabled — commands now use real IP.\n")
+
+        self.ghost_btn.setText("Ghost Mode: OFF")
+        self.ghost_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: 1px solid #27272a; color: #52525b;
+                border-radius: 8px; padding: 6px 14px; font-size: 14px; font-weight: 600;
+            }
+            QPushButton:hover { border-color: #8b5cf6; color: #8b5cf6; }
+        """)
+        self.ghost_status.hide()
+
+    def _should_proxy(self, cmd):
+        """Check if a command should go through proxychains."""
+        if not self._ghost_mode:
+            return False
+        # Don't proxy local/WiFi/hardware tools
+        parts = re.split(r'[;&|]+', cmd)
+        for part in parts:
+            words = part.strip().split()
+            if not words:
+                continue
+            tool = words[0]
+            if tool == "sudo" and len(words) > 1:
+                tool = words[1]
+            if tool == "echo":
+                # echo 'pw' | sudo -S ... — check the tool after sudo -S
+                sudo_idx = part.find("sudo")
+                if sudo_idx >= 0:
+                    after_sudo = part[sudo_idx:].split()
+                    for w in after_sudo[1:]:
+                        if w.startswith("-"):
+                            continue
+                        tool = w
+                        break
+            if tool in self._NO_PROXY_TOOLS:
+                return False
+            # Don't proxy bash scripts (they handle their own tools)
+            if tool == "bash" or cmd.startswith("bash "):
+                return False
+        return True
+
+    def _wrap_proxychains(self, cmd):
+        """Wrap a command with proxychains4."""
+        # If command already has proxychains, don't double-wrap
+        if "proxychains" in cmd:
+            return cmd
+        # For sudo commands: sudo proxychains4 -q <rest>
+        if cmd.startswith("sudo "):
+            return f"sudo proxychains4 -q {cmd[5:]}"
+        # For piped sudo: echo 'pw' | sudo -S proxychains4 -q <rest>
+        if "| sudo -S " in cmd:
+            return cmd.replace("| sudo -S ", "| sudo -S proxychains4 -q ")
+        return f"proxychains4 -q {cmd}"
 
     # ═══════════════════════════════════════
     #  MISC
