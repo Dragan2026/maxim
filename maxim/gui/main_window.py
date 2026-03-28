@@ -1098,54 +1098,62 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # ── Use iwlist scan (managed mode) to find BSSID+channel, then monitor+capture ──
+        # ── Use nmcli to find BSSID+channel (works regardless of interface state) ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Ensure managed mode for iwlist scan
-        script.write(f"echo '[*] Preparing {iface} for scan...'\n")
-        script.write(f"sudo airmon-ng check kill 2>/dev/null\n")
+        # Make sure NetworkManager is running and interface is managed
+        script.write(f"echo '[*] Preparing to scan...'\n")
+        script.write("sudo systemctl start NetworkManager 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
         script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
         script.write("sleep 2\n\n")
 
-        # iwlist scan — output looks like:
-        #   Cell 01 - Address: AA:BB:CC:DD:EE:FF
-        #             Channel:6
-        #             ESSID:"MAX"
-        # Parse with simple grep/sed
+        # nmcli dev wifi list outputs:
+        #   IN-USE  BSSID              SSID        MODE   CHAN  ...
+        #           AA:BB:CC:DD:EE:FF  MAX         Infra  6     ...
+        # Use --rescan yes to force fresh scan
+        # Use -t (terse) for machine-readable colon-separated output
+        # -f BSSID,SSID,CHAN for just the fields we need
         script.write("BSSID=''\nCHANNEL=''\n")
         script.write(f"echo '[*] Scanning for {essid}...'\n")
         script.write("for i in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  echo \"  Attempt $i/10\"\n")
-        script.write(f"  DUMP=$(sudo iwlist {iface} scan 2>/dev/null)\n")
-        # Find the Cell block containing our ESSID, extract Address and Channel
-        # Strategy: dump to temp file, use grep -B to get lines before ESSID match
-        script.write(f"  echo \"$DUMP\" > /tmp/maxim_iwlist.txt\n")
-        # Get line number of our ESSID
-        script.write(f"  ESSID_LINE=$(grep -n 'ESSID:\"{essid}\"' /tmp/maxim_iwlist.txt | head -1 | cut -d: -f1)\n")
-        script.write("  if [ -n \"$ESSID_LINE\" ]; then\n")
-        # Search backwards from ESSID line for Address and Channel
-        script.write("    BLOCK=$(head -n $ESSID_LINE /tmp/maxim_iwlist.txt | tail -n 20)\n")
-        script.write("    BSSID=$(echo \"$BLOCK\" | grep 'Address:' | tail -1 | sed 's/.*Address: //')\n")
-        script.write("    CHANNEL=$(echo \"$BLOCK\" | grep 'Channel:' | tail -1 | sed 's/.*Channel://')\n")
+        # -t = terse (colon-separated), -f = fields, --rescan yes = fresh scan
+        script.write(f"  LINE=$(nmcli -t -f BSSID,SSID,CHAN dev wifi list ifname {iface} --rescan yes 2>/dev/null | grep -i ':{essid}:' | head -1)\n")
+        # If exact match fails, try partial match
+        script.write("  if [ -z \"$LINE\" ]; then\n")
+        script.write(f"    LINE=$(nmcli -t -f BSSID,SSID,CHAN dev wifi list ifname {iface} 2>/dev/null | grep -i '{essid}' | head -1)\n")
+        script.write("  fi\n")
+        script.write("  if [ -n \"$LINE\" ]; then\n")
+        # terse format: AA\\:BB\\:CC\\:DD\\:EE\\:FF:SSID:CHAN
+        # BSSID colons are escaped as \\: in terse mode, SSID and CHAN separated by unescaped :
+        # Extract BSSID (first 17 chars after unescaping) and CHAN (last field)
+        script.write("    BSSID=$(echo \"$LINE\" | sed 's/\\\\\\:/:/g' | cut -c1-17)\n")
+        script.write("    CHANNEL=$(echo \"$LINE\" | rev | cut -d: -f1 | rev)\n")
         script.write("    if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then\n")
         script.write("      echo \"  FOUND: BSSID=$BSSID  Channel=$CHANNEL\"\n")
         script.write("      break\n")
         script.write("    fi\n")
         script.write("  fi\n")
-        script.write("  sleep 2\n")
-        script.write("done\n")
-        script.write("rm -f /tmp/maxim_iwlist.txt\n\n")
+        script.write("  sleep 3\n")
+        script.write("done\n\n")
 
+        # Debug: if not found, show what nmcli sees so user can tell us
         script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
-        script.write(f"  echo '[!] Could not find {essid} after 10 scans'\n")
+        script.write(f"  echo '[!] Could not find {essid}'\n")
+        script.write("  echo ''\n")
+        script.write("  echo 'Networks visible:'\n")
+        script.write(f"  nmcli -f BSSID,SSID,CHAN dev wifi list ifname {iface} 2>/dev/null\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("  read -p 'Press Enter to close'\n  exit 1\nfi\n\n")
+
+        # Kill NetworkManager so it doesn't interfere with monitor mode
+        script.write("sudo airmon-ng check kill 2>/dev/null\n\n")
 
         # Switch to monitor mode
         script.write(f"echo '[*] Switching to monitor mode...'\n")
