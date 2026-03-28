@@ -553,11 +553,7 @@ class MaximWindow(QMainWindow):
             "ls ", "cd ", "apt ", "apt-get ", "systemctl ",
             "service ", "chmod ", "chown ", "mkdir ", "rm ", "cp ", "mv ",
         )
-        if any(q_lower.startswith(p) for p in raw_prefixes):
-            self._execute_command(query)
-            return
-
-        # 2. Stress test / DoS shortcuts
+        # 2. Stress test / DoS shortcuts (check BEFORE raw command execution)
         target_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', q_lower)
         target_ip = target_match.group(1) if target_match else None
         if not target_ip:
@@ -589,7 +585,12 @@ class MaximWindow(QMainWindow):
                 self._execute_command(f"ufonet -a {target_ip} -r 500 --threads 200")
                 return
 
-        # 3. Handshake capture workflow
+        # 3. Raw command (starts with a known tool binary)
+        if any(q_lower.startswith(p) for p in raw_prefixes):
+            self._execute_command(query)
+            return
+
+        # 4. Handshake capture workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
             handshake_match = re.search(r'handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
