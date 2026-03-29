@@ -854,8 +854,9 @@ class MaximWindow(QMainWindow):
             return []
 
     def _select_wifi_adapter(self):
-        """Auto-select external WiFi adapter for monitor mode.
-        Always picks the external adapter (not wlan0/internal).
+        """Auto-select WiFi adapter for monitor mode.
+        wlan0 = USB adapter (attack/monitor mode)
+        wlan1 = integrated adapter (NEVER touch)
         Returns (monitor_iface, keep_iface)."""
         ifaces = self._detect_wifi_interfaces()
 
@@ -867,19 +868,14 @@ class MaximWindow(QMainWindow):
         if len(ifaces) == 1:
             return ifaces[0], None
 
-        # Auto-pick external adapter (not wlan0 = internal)
-        # External adapters are typically wlan1, wlan2, etc.
-        external = [i for i in ifaces if i != "wlan0"]
-        internal = [i for i in ifaces if i == "wlan0"]
+        # wlan0 = USB adapter (use for monitor mode)
+        # wlan1 = integrated adapter (never touch)
+        if "wlan0" in ifaces:
+            keep = "wlan1" if "wlan1" in ifaces else None
+            return "wlan0", keep
 
-        if external:
-            monitor_iface = external[0]
-            keep_iface = internal[0] if internal else None
-        else:
-            monitor_iface = ifaces[0]
-            keep_iface = ifaces[1] if len(ifaces) > 1 else None
-
-        return monitor_iface, keep_iface
+        # Fallback: pick first available
+        return ifaces[0], ifaces[1] if len(ifaces) > 1 else None
 
     def _is_wifi_command(self, cmd):
         """Check if command involves WiFi tools that need monitor mode."""
@@ -920,7 +916,7 @@ class MaximWindow(QMainWindow):
 
     def _start_monitor_mode(self, iface, keep_iface):
         """Start monitor mode on selected adapter using iw (safe — never kills NetworkManager).
-        wlan0 stays untouched. Returns the monitor interface name."""
+        wlan1 stays untouched. Returns the monitor interface name."""
         self.terminal.appendPlainText(f"\n[WiFi] Starting monitor mode on {iface}...\n")
         if keep_iface:
             self.terminal.appendPlainText(f"[WiFi] {keep_iface} will NOT be touched.\n")
@@ -947,12 +943,12 @@ class MaximWindow(QMainWindow):
         return mon_name
 
     def _restore_network(self):
-        """Restore wlan1 from monitor mode back to managed. Never touches wlan0."""
+        """Restore wlan0 from monitor mode back to managed. Never touches wlan1."""
         mon = getattr(self, '_monitor_iface_name', None)
         self._wifi_adapter_selected = False
         self._monitor_iface_name = None
-        # Restore wlan1 to managed mode using iw (safe — doesn't affect wlan0)
-        restore_iface = mon or "wlan1"
+        # Restore wlan0 to managed mode using iw (safe — doesn't affect wlan1)
+        restore_iface = mon or "wlan0"
         self._execute_command(
             f"sudo ip link set {restore_iface} down 2>/dev/null; "
             f"sudo iw dev {restore_iface} set type managed 2>/dev/null; "
