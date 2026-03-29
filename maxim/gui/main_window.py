@@ -1342,21 +1342,15 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Kill ANY process that could block injection on attack adapter
-        script.write(f"sudo airmon-ng check kill 2>/dev/null\n")
+        # Kill ONLY wpa_supplicant/dhclient on the ATTACK adapter — never touch NetworkManager
+        script.write(f"# Find and kill wpa_supplicant ONLY for {iface}\n")
+        script.write(f"WPA_PID=$(ps aux | grep 'wpa_supplicant' | grep '{iface}' | grep -v grep | awk '{{print $2}}')\n")
+        script.write(f"[ -n \"$WPA_PID\" ] && sudo kill $WPA_PID 2>/dev/null\n")
+        script.write(f"DHC_PID=$(ps aux | grep 'dhclient' | grep '{iface}' | grep -v grep | awk '{{print $2}}')\n")
+        script.write(f"[ -n \"$DHC_PID\" ] && sudo kill $DHC_PID 2>/dev/null\n")
+        script.write(f"# Unmanage attack adapter from NetworkManager so it doesn't interfere\n")
+        script.write(f"sudo nmcli device set {iface} managed no 2>/dev/null\n")
         script.write("sleep 1\n")
-        # Re-enable monitor mode after check kill
-        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        # Restore protected adapter's network after check kill nuked NetworkManager
-        if keep_iface:
-            script.write(f"sudo systemctl restart NetworkManager 2>/dev/null\n")
-            script.write("sleep 2\n")
-            script.write(f"sudo nmcli device connect $PROTECTED_IFACE 2>/dev/null\n")
-            script.write("sleep 2\n")
-            script.write(f"echo '[GUARD] Restored network on $PROTECTED_IFACE'\n")
-        script.write("\n")
 
         # Start airodump in background
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface} &>/dev/null &\n")
