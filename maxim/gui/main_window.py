@@ -626,7 +626,7 @@ class MaximWindow(QMainWindow):
         target_ip = target_match.group(1) if target_match else None
         if not target_ip:
             # Try domain
-            dm = re.search(r'([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})', query)
+            dm = re.search(r'([a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)', query)
             if dm and dm.group(1) not in ('of', 'the'):
                 target_ip = dm.group(1)
         if not target_ip:
@@ -2559,7 +2559,7 @@ class MaximWindow(QMainWindow):
         ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', query)
         if ip_match:
             return ip_match.group(1)
-        domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)\b', query)
+        domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)\b', query)
         if domain_match:
             candidate = domain_match.group(1)
             if candidate not in {'example.com', 'wlan0.mon'}:
