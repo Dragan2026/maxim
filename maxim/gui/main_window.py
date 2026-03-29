@@ -1461,63 +1461,44 @@ class MaximWindow(QMainWindow):
         script.write("echo \"  Date: $(date)\" | tee -a \"$REPORT\"\n")
         script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n\n")
 
-        # Stage 1: Nmap service/version detection (use resolved IP, no pipe — write direct to file)
+        # Stage 1: Nmap service/version detection + vuln scripts combined
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [1/8] NMAP — Service & Version Detection' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [1/6] NMAP — Port Scan + Service Versions + Vulns' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write(f"nmap -Pn -sV -sC -T4 -p- --open -oN '{report_dir}/nmap_services.txt' -oX '{report_dir}/nmap_services.xml' \"$TARGET_IP\" 2>&1\n")
+        script.write(f"nmap -Pn -sV -sC --script vuln --version-intensity 9 -T4 --open "
+                     f"-oN '{report_dir}/nmap_services.txt' -oX '{report_dir}/nmap_services.xml' "
+                     f"\"$TARGET_IP\" 2>&1\n")
         script.write(f"cat '{report_dir}/nmap_services.txt' >> \"$REPORT\" 2>/dev/null\n\n")
 
-        # Stage 2: Nmap vulnerability scripts
+        # Stage 2: Server banner — exact versions via HTTP headers
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [2/8] NMAP — Vulnerability Scripts' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [2/6] SERVER HEADERS — Version Detection' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write(f"nmap -Pn --script vuln -T4 \"$TARGET_IP\" 2>&1 >> \"$REPORT\"\n")
-        script.write(f"tail -50 \"$REPORT\" | grep -E 'VULNERABLE|CVE|vuln'\n\n")
-
-        # Stage 3: Server banner grab — get exact server version (Apache 2.4.x, nginx 1.x, etc.)
-        script.write("echo '' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [3/8] SERVER BANNER — Exact Version Detection' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  --- HTTP Headers ---' | tee -a \"$REPORT\"\n")
+        script.write("echo '--- HTTP ---' | tee -a \"$REPORT\"\n")
         script.write("curl -sI -m 10 \"http://$TARGET_IP\" -H \"Host: $TARGET\" 2>&1 | tee -a \"$REPORT\"\n")
-        script.write("echo '' | tee -a \"$REPORT\"\n")
-        script.write("echo '  --- HTTPS Headers ---' | tee -a \"$REPORT\"\n")
-        script.write("curl -skI -m 10 \"https://$TARGET\" 2>&1 | tee -a \"$REPORT\"\n")
-        script.write("echo '' | tee -a \"$REPORT\"\n")
-        script.write("echo '  --- Nmap banner grab ---' | tee -a \"$REPORT\"\n")
-        script.write("nmap -Pn -sV --version-intensity 9 -p 80,443,8080,8443,21,22,25,110,143,3306,5432 \"$TARGET_IP\" 2>&1 | tee -a \"$REPORT\"\n\n")
+        script.write("echo '--- HTTPS ---' | tee -a \"$REPORT\"\n")
+        script.write("curl -skI -m 10 \"https://$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
-        # Stage 4: Whatweb (tech fingerprinting)
+        # Stage 3: Whatweb — use IP with vhost to avoid DNS timeout
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [4/8] WHATWEB — Technology Fingerprinting' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [3/6] WHATWEB — Technology Fingerprinting' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("whatweb -v -a 3 \"https://$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] whatweb not available' | tee -a \"$REPORT\"\n\n")
+        script.write("timeout 60 whatweb -v -a 3 \"http://$TARGET_IP\" --header \"Host:$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] whatweb timeout or not available' | tee -a \"$REPORT\"\n\n")
 
-        # Stage 5: Nikto (use IP, skip update check, use -nointeractive)
+        # Stage 4: Nikto
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [5/8] NIKTO — Web Vulnerability Scanner' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [4/6] NIKTO — Web Vulnerability Scanner' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("nikto -h \"$TARGET_IP\" -vhost \"$TARGET\" -C all -nointeractive -maxtime 300 -no404 2>&1 | tee -a \"$REPORT\" || echo '  [!] nikto not available' | tee -a \"$REPORT\"\n\n")
+        script.write("nikto -h \"$TARGET_IP\" -vhost \"$TARGET\" -C all -maxtime 300 2>&1 | tee -a \"$REPORT\" || echo '  [!] nikto not available' | tee -a \"$REPORT\"\n\n")
 
-        # Stage 6: Gobuster (directory enumeration)
+        # Stage 5: Searchsploit
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [6/8] GOBUSTER — Directory Enumeration' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("WORDLIST='/usr/share/wordlists/dirb/common.txt'\n")
-        script.write("if [ ! -f \"$WORDLIST\" ]; then WORDLIST='/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt'; fi\n")
-        script.write("gobuster dir -u \"http://$TARGET_IP\" -w \"$WORDLIST\" -t 50 -q --timeout 10s -H \"Host: $TARGET\" 2>&1 | head -100 | tee -a \"$REPORT\" || echo '  [!] gobuster not available' | tee -a \"$REPORT\"\n\n")
-
-        # Stage 7: Searchsploit (use XML output from nmap)
-        script.write("echo '' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [7/8] SEARCHSPLOIT — Known Exploits Lookup' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [5/6] SEARCHSPLOIT — Known Exploits' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write(f"if [ -f '{report_dir}/nmap_services.xml' ]; then\n")
         script.write(f"  searchsploit --nmap '{report_dir}/nmap_services.xml' 2>&1 | tee -a \"$REPORT\" || echo '  [!] searchsploit not available' | tee -a \"$REPORT\"\n")
@@ -1525,10 +1506,10 @@ class MaximWindow(QMainWindow):
         script.write("  echo '  [!] No nmap output to search' | tee -a \"$REPORT\"\n")
         script.write("fi\n\n")
 
-        # Stage 8: SSL/TLS check
+        # Stage 6: SSL/TLS check
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [8/8] SSL/TLS — Certificate & Cipher Check' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [6/6] SSL/TLS — Certificate & Cipher Check' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write("sslscan \"$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] sslscan not available' | tee -a \"$REPORT\"\n\n")
 
@@ -2103,21 +2084,37 @@ class MaximWindow(QMainWindow):
 
         if self.ai and self.ai.is_available():
             prompt = (
-                f"I just ran a full vulnerability scan on target: {target}\n\n"
-                f"Here are the complete scan results:\n\n{report_content}\n\n"
-                f"You are a penetration testing expert. Analyze these scan results and write a FULL VULNERABILITY REPORT. "
-                f"Do NOT say 'based on results' or ask me to provide anything. Write the complete report yourself with these sections:\n\n"
-                f"VULNERABILITY REPORT FOR {target}\n\n"
-                f"1. OPEN PORTS & SERVICES — list every open port, service name, version detected\n"
-                f"2. CRITICAL VULNERABILITIES — every vulnerability found rated Critical/High/Medium/Low with CVE numbers where applicable\n"
-                f"3. TECHNOLOGY STACK — CMS, web server, frameworks, plugins detected and their known weaknesses\n"
-                f"4. EXPLOITATION GUIDE — for EACH vulnerability give the exact step-by-step commands to exploit it "
-                f"(use nmap, metasploit, sqlmap, wpscan, nikto, curl, or any relevant tool with full command syntax)\n"
-                f"5. TOOLS TO USE — specific Metasploit modules (e.g. exploit/unix/webapp/...), exploit-db IDs, "
-                f"wpscan commands, nuclei templates, and manual exploitation commands ready to copy-paste\n"
-                f"6. MISSING SECURITY HEADERS — list each missing header and its risk\n"
-                f"7. RECOMMENDATIONS — prioritized fixes\n\n"
-                f"Be specific with exact copy-paste commands. This is for authorized penetration testing."
+                f"You are a senior penetration tester writing a vulnerability report. "
+                f"Analyze these scan results for {target} and write a clean, readable report. "
+                f"Do NOT repeat raw scan output. Do NOT include duplicates. Do NOT say 'based on these results provide'. "
+                f"Write the report directly.\n\n"
+                f"SCAN DATA:\n{report_content}\n\n"
+                f"Write this exact report structure:\n\n"
+                f"═══ VULNERABILITY REPORT: {target} ═══\n\n"
+                f"TARGET SUMMARY\n"
+                f"- IP, server software with exact version (e.g. Apache 2.4.57, nginx 1.24.0)\n\n"
+                f"OPEN PORTS & SERVICES\n"
+                f"Table format: PORT | SERVICE | VERSION | NOTES\n"
+                f"Include every open port with exact service version found in nmap output.\n\n"
+                f"VULNERABILITIES FOUND\n"
+                f"For each vulnerability:\n"
+                f"- Severity: CRITICAL/HIGH/MEDIUM/LOW\n"
+                f"- CVE number (if applicable)\n"
+                f"- Description (1 line)\n"
+                f"- Exploit command (exact copy-paste command using metasploit/sqlmap/wpscan/curl/nmap)\n"
+                f"Include: missing security headers, outdated software versions with known CVEs, "
+                f"exposed admin panels, default credentials, SSL/TLS weaknesses.\n"
+                f"For each outdated service version found, search your knowledge for known CVEs and exploits.\n\n"
+                f"EXPLOITATION COMMANDS\n"
+                f"Ready-to-run commands grouped by attack vector. Include:\n"
+                f"- wpscan commands if WordPress detected\n"
+                f"- Metasploit modules (use/set/exploit)\n"
+                f"- searchsploit / exploit-db references\n"
+                f"- nuclei templates\n"
+                f"- Manual curl/wget exploitation commands\n\n"
+                f"RECOMMENDATIONS\n"
+                f"Prioritized list of fixes.\n\n"
+                f"Keep it clean. No duplicate info. No filler text. Authorized penetration testing."
             )
             self._ai_execute(prompt)
         else:
