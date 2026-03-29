@@ -1150,12 +1150,15 @@ class MaximWindow(QMainWindow):
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Kill processes that block injection on wlan0 — but NOT NetworkManager
-        # (wpa_supplicant and dhclient on wlan0 interfere with injection)
-        script.write(f"# Kill interfering processes on {iface} only (not NetworkManager)\n")
-        script.write(f"sudo pkill -f 'wpa_supplicant.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhclient.*{iface}' 2>/dev/null\n")
-        script.write(f"sudo pkill -f 'dhcpcd.*{iface}' 2>/dev/null\n\n")
+        # Kill ONLY processes bound to the attack interface — never the shared daemon
+        # wpa_supplicant often runs as a single process for ALL interfaces;
+        # pkill would kill it for wlan1 too → all networks die.
+        # Instead, use nmcli to disconnect only the attack interface, or skip if not managed.
+        script.write(f"# Disconnect {iface} from NetworkManager without killing shared daemons\n")
+        script.write(f"sudo nmcli device disconnect {iface} 2>/dev/null || true\n")
+        script.write(f"# Only kill dhclient/dhcpcd that are specifically for {iface}\n")
+        script.write(f"DHPID=$(pgrep -f 'dhclient.*{iface}' 2>/dev/null); [ -n \"$DHPID\" ] && sudo kill $DHPID 2>/dev/null || true\n")
+        script.write(f"DHPID=$(pgrep -f 'dhcpcd.*{iface}' 2>/dev/null); [ -n \"$DHPID\" ] && sudo kill $DHPID 2>/dev/null || true\n\n")
 
         # Quick scan to find BSSID+channel using iw (managed mode not needed —
         # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
@@ -1168,7 +1171,9 @@ class MaximWindow(QMainWindow):
         script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
         script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CSV\" ]; then\n")
-        script.write(f"    LINE=$(grep -i '{essid}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
+        script.write(f"    LINE=$(grep -F ',{essid},' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
+        script.write(f"    # Fallback: case-insensitive if exact match fails\n")
+        script.write(f"    if [ -z \"$LINE\" ]; then LINE=$(grep -iF ',{essid},' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1); fi\n")
         script.write("    if [ -n \"$LINE\" ]; then\n")
         script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
         script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
@@ -1970,9 +1975,14 @@ class MaximWindow(QMainWindow):
                     self._execute_command(self._build_crack_cmd("hashcat", filepath, hc_mode))
                 else:
                     self._execute_command(self._build_crack_cmd("john", filepath, john_fmt))
+            elif hash_len == 60:
+                # 60 chars = almost certainly bcrypt ($2a$/$2b$/$2y$ without recognizable prefix)
+                self._term_write(f"Detected: bcrypt (60 chars) — {wl_count} wordlists + rules\n")
+                self._execute_command(self._build_crack_cmd("hashcat", filepath, "3200"))
             else:
                 self._term_write(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
-                self._execute_command(self._build_crack_cmd("john", filepath))
+                # Try crypt format first (handles most /etc/shadow style hashes)
+                self._execute_command(self._build_crack_cmd("john", filepath, "crypt"))
 
         elif ext in ('.csv', '.xml'):
             self._term_write(f"\n⚡ Showing {fname}...\n")
