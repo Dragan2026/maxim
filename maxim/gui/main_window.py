@@ -1229,7 +1229,9 @@ class MaximWindow(QMainWindow):
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
-        script.write(f"rm -f '{signal_file}'\n\n")
+        script.write(f"rm -f '{signal_file}'\n")
+        script.write(f"# Clean old capture files so we don't pick up stale handshakes\n")
+        script.write(f"rm -f '{capture_prefix}'-*.cap '{capture_prefix}'-*.csv '{capture_prefix}'-*.pcap 2>/dev/null\n\n")
 
         # SAFETY GUARD: protect the managed adapter — abort if anything tries to touch it
         if keep_iface:
@@ -1384,7 +1386,8 @@ class MaximWindow(QMainWindow):
         # Check for handshake
         script.write(f"  CAP_FILE=$(ls -t '{capture_prefix}'-*.cap 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CAP_FILE\" ]; then\n")
-        script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -qE '[1-9][0-9]* handshake'; then\n")
+        script.write("    # Verify handshake exists AND matches our target BSSID\n")
+        script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -i \"$BSSID\" | grep -qE '[1-9][0-9]* handshake'; then\n")
         script.write("      echo 'HANDSHAKE CAPTURED!'\n")
         script.write("      break\n")
         script.write("    fi\n")
