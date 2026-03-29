@@ -1461,39 +1461,45 @@ class MaximWindow(QMainWindow):
         script.write("echo \"  Date: $(date)\" | tee -a \"$REPORT\"\n")
         script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n\n")
 
-        # Stage 1: Nmap service/version detection + vuln scripts combined
+        # Stage 1: Fast port discovery
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [1/6] NMAP — Port Scan + Service Versions + Vulns' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [1/6] NMAP — Fast Port Discovery' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write(f"nmap -Pn -sV -sC --script vuln --version-intensity 9 -T4 --open "
+        script.write(f"nmap -Pn -T4 --open --top-ports 1000 \"$TARGET_IP\" -oG '{report_dir}/ports.gnmap' 2>&1 | tee -a \"$REPORT\"\n")
+        # Extract open ports into variable
+        script.write(f"OPEN_PORTS=$(grep -oP '\\d+/open' '{report_dir}/ports.gnmap' 2>/dev/null | cut -d/ -f1 | tr '\\n' ',' | sed 's/,$//')\n")
+        script.write("if [ -z \"$OPEN_PORTS\" ]; then OPEN_PORTS='80,443,22,21,25,8080'; fi\n")
+        script.write("echo \"  Open ports found: $OPEN_PORTS\" | tee -a \"$REPORT\"\n\n")
+
+        # Stage 2: Service version detection on found ports only
+        script.write("echo '' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [2/6] NMAP — Service Versions + Vuln Scripts' | tee -a \"$REPORT\"\n")
+        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
+        script.write(f"nmap -Pn -sV -sC --script vuln -T4 -p \"$OPEN_PORTS\" "
                      f"-oN '{report_dir}/nmap_services.txt' -oX '{report_dir}/nmap_services.xml' "
-                     f"\"$TARGET_IP\" 2>&1\n")
-        script.write(f"cat '{report_dir}/nmap_services.txt' >> \"$REPORT\" 2>/dev/null\n\n")
+                     f"\"$TARGET_IP\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
-        # Stage 2: Server banner — exact versions via HTTP headers
+        # Stage 3: HTTP headers + whatweb
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [2/6] SERVER HEADERS — Version Detection' | tee -a \"$REPORT\"\n")
+        script.write("echo '  [3/6] WEB — Headers + Technology Fingerprint' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '--- HTTP ---' | tee -a \"$REPORT\"\n")
+        script.write("echo '--- HTTP Headers ---' | tee -a \"$REPORT\"\n")
         script.write("curl -sI -m 10 \"http://$TARGET_IP\" -H \"Host: $TARGET\" 2>&1 | tee -a \"$REPORT\"\n")
-        script.write("echo '--- HTTPS ---' | tee -a \"$REPORT\"\n")
-        script.write("curl -skI -m 10 \"https://$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
-
-        # Stage 3: Whatweb — use IP with vhost to avoid DNS timeout
-        script.write("echo '' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("echo '  [3/6] WHATWEB — Technology Fingerprinting' | tee -a \"$REPORT\"\n")
-        script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("timeout 60 whatweb -v -a 3 \"http://$TARGET_IP\" --header \"Host:$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] whatweb timeout or not available' | tee -a \"$REPORT\"\n\n")
+        script.write("echo '--- HTTPS Headers ---' | tee -a \"$REPORT\"\n")
+        script.write("curl -skI -m 10 \"https://$TARGET_IP\" -H \"Host: $TARGET\" 2>&1 | tee -a \"$REPORT\"\n")
+        script.write("echo '--- WhatWeb ---' | tee -a \"$REPORT\"\n")
+        script.write("timeout 60 whatweb -v -a 3 \"http://$TARGET_IP\" --header \"Host:$TARGET\" 2>&1 | tee -a \"$REPORT\"\n")
+        script.write("timeout 60 whatweb -v -a 3 \"https://$TARGET_IP\" --header \"Host:$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
         # Stage 4: Nikto
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write("echo '  [4/6] NIKTO — Web Vulnerability Scanner' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("nikto -h \"$TARGET_IP\" -vhost \"$TARGET\" -C all -maxtime 300 2>&1 | tee -a \"$REPORT\" || echo '  [!] nikto not available' | tee -a \"$REPORT\"\n\n")
+        script.write("nikto -h \"$TARGET_IP\" -vhost \"$TARGET\" -C all -maxtime 300 2>&1 | tee -a \"$REPORT\"\n\n")
 
         # Stage 5: Searchsploit
         script.write("echo '' | tee -a \"$REPORT\"\n")
@@ -1501,7 +1507,7 @@ class MaximWindow(QMainWindow):
         script.write("echo '  [5/6] SEARCHSPLOIT — Known Exploits' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write(f"if [ -f '{report_dir}/nmap_services.xml' ]; then\n")
-        script.write(f"  searchsploit --nmap '{report_dir}/nmap_services.xml' 2>&1 | tee -a \"$REPORT\" || echo '  [!] searchsploit not available' | tee -a \"$REPORT\"\n")
+        script.write(f"  searchsploit --nmap '{report_dir}/nmap_services.xml' 2>&1 | tee -a \"$REPORT\"\n")
         script.write("else\n")
         script.write("  echo '  [!] No nmap output to search' | tee -a \"$REPORT\"\n")
         script.write("fi\n\n")
@@ -1511,7 +1517,7 @@ class MaximWindow(QMainWindow):
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write("echo '  [6/6] SSL/TLS — Certificate & Cipher Check' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write("sslscan \"$TARGET\" 2>&1 | tee -a \"$REPORT\" || echo '  [!] sslscan not available' | tee -a \"$REPORT\"\n\n")
+        script.write("sslscan \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
         # Final summary
         script.write("echo '' | tee -a \"$REPORT\"\n")
@@ -2114,9 +2120,31 @@ class MaximWindow(QMainWindow):
                 f"- Manual curl/wget exploitation commands\n\n"
                 f"RECOMMENDATIONS\n"
                 f"Prioritized list of fixes.\n\n"
-                f"Keep it clean. No duplicate info. No filler text. Authorized penetration testing."
+                f"Keep it clean. No duplicate info. No filler text. Authorized penetration testing.\n\n"
+                f"IMPORTANT: Output ONLY the report text. Do NOT output any shell commands to run. "
+                f"This is a written report, not commands."
             )
-            self._ai_execute(prompt)
+            # Display-only AI call — do NOT use _ai_execute which tries to run response as commands
+            self._set_running(True, "AI writing vulnerability report...")
+            thread = AIStreamSignal(self.ai, prompt)
+
+            def on_report_done(response):
+                try:
+                    self._set_running(False)
+                    if response.startswith("[Error]") or response.startswith("[AI Error]"):
+                        self._term_write(f"\n{response}\n")
+                        return
+                    # Clean markdown fences
+                    cleaned = response.strip()
+                    cleaned = re.sub(r'^```\w*\n?', '', cleaned)
+                    cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+                    self._term_write(f"\n{cleaned.strip()}\n")
+                except Exception as e:
+                    self._term_write(f"\n[Error] {e}\n")
+                    self._set_running(False)
+
+            thread.finished.connect(on_report_done)
+            thread.start()
         else:
             self._term_write(
                 "[!] AI not configured — cannot analyze results automatically.\n"
