@@ -933,8 +933,10 @@ class MaximWindow(QMainWindow):
         return ifaces
 
     def _select_wifi_adapter(self):
-        """Show adapter picker dialog. User chooses which is MONITOR (attack)
-        and which is MANAGED (protected — never touched).
+        """Auto-select WiFi adapters:
+        - ATTACK = USB adapter that is NOT connected to any network → monitor mode
+        - PROTECTED = adapter that IS connected to a network → never touched
+        No dialog needed. Fully automatic.
         Returns (monitor_iface, keep_iface)."""
         ifaces = self._detect_wifi_interfaces()
 
@@ -943,96 +945,49 @@ class MaximWindow(QMainWindow):
                 "No wireless interfaces found.\n\nMake sure a WiFi adapter is connected.")
             return None, None
 
-        # If only one adapter, no choice needed
+        # If only one adapter, use it (no protection possible)
         if len(ifaces) == 1:
+            self._term_write(f"\n[WiFi] Only one adapter: {ifaces[0]['name']} → ATTACK mode")
+            self._protected_iface = None
             return ifaces[0]['name'], None
 
-        # Build dialog
-        from PyQt5.QtWidgets import QDialog, QRadioButton, QButtonGroup, QGroupBox, QGridLayout
+        # Sort: connected adapters = protected, not-connected = attack candidates
+        connected = [i for i in ifaces if i['connected']]
+        not_connected = [i for i in ifaces if not i['connected']]
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("WiFi Adapter Setup")
-        dlg.setMinimumWidth(520)
-        dlg.setStyleSheet("""
-            QDialog { background: #0a0a0a; color: #e4e4e7; }
-            QGroupBox { color: #a1a1aa; border: 1px solid #27272a; border-radius: 6px;
-                         margin-top: 12px; padding: 14px 10px 10px 10px; font-size: 13px; }
-            QGroupBox::title { subcontrol-position: top left; padding: 2px 8px; }
-            QRadioButton { color: #e4e4e7; font-size: 13px; padding: 6px; }
-            QRadioButton::indicator { width: 14px; height: 14px; }
-            QLabel { color: #a1a1aa; font-size: 12px; }
-            QPushButton { background: #dc2626; color: white; border: none; border-radius: 4px;
-                          padding: 8px 24px; font-weight: bold; font-size: 13px; }
-            QPushButton:hover { background: #ef4444; }
-            QPushButton:disabled { background: #52525b; color: #71717a; }
-        """)
+        # Prefer USB + not connected as attack adapter
+        usb_free = [i for i in not_connected if i['usb']]
+        attack = None
+        if usb_free:
+            attack = usb_free[0]
+        elif not_connected:
+            attack = not_connected[0]
+        else:
+            # All adapters connected — pick USB as attack (will be disconnected)
+            usb_all = [i for i in ifaces if i['usb']]
+            if usb_all:
+                attack = usb_all[0]
+            else:
+                attack = ifaces[0]
 
-        layout = QVBoxLayout(dlg)
+        # Protected = all connected adapters (especially the one providing internet)
+        protected = [i for i in ifaces if i['name'] != attack['name'] and i['connected']]
+        keep_iface = protected[0]['name'] if protected else None
+        # If no connected adapter found, protect the other one anyway
+        if not keep_iface:
+            others = [i for i in ifaces if i['name'] != attack['name']]
+            keep_iface = others[0]['name'] if others else None
 
-        # Header
-        header = QLabel("Select which adapter to use for ATTACK (monitor mode).\n"
-                        "The other adapter stays in managed mode and is PROTECTED.")
-        header.setStyleSheet("color: #fbbf24; font-size: 13px; font-weight: bold; padding: 4px;")
-        layout.addWidget(header)
-
-        # Adapter radio buttons
-        group = QGroupBox("WiFi Adapters Detected")
-        grid = QGridLayout(group)
-        btn_group = QButtonGroup(dlg)
-
-        for i, ifc in enumerate(ifaces):
-            tag = "USB" if ifc['usb'] else "Internal"
-            conn_str = f" — Connected to: {ifc['connected']}" if ifc['connected'] else " — Not connected"
-            label = f"{ifc['name']}  [{tag}]  {ifc['driver']}  ({ifc['mac']}){conn_str}"
-            rb = QRadioButton(label)
-            rb.setProperty('iface_name', ifc['name'])
-            btn_group.addButton(rb, i)
-            grid.addWidget(rb, i, 0)
-
-            # Pre-select: prefer USB adapter that is NOT connected as the attack adapter
-            if ifc['usb'] and not ifc['connected']:
-                rb.setChecked(True)
-            elif i == 0 and not any(x['usb'] and not x['connected'] for x in ifaces):
-                # Fallback: select first if no obvious USB candidate
-                rb.setChecked(True)
-
-        layout.addWidget(group)
-
-        # Warning about protected adapter
-        warn = QLabel("The adapter NOT selected above will be PROTECTED.\n"
-                      "MAXIM will never put it in monitor mode or disconnect it.")
-        warn.setStyleSheet("color: #22c55e; font-size: 12px; padding: 6px;")
-        layout.addWidget(warn)
-
-        # OK button
-        btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("CONFIRM")
-        ok_btn.clicked.connect(dlg.accept)
-        btn_layout.addStretch()
-        btn_layout.addWidget(ok_btn)
-        layout.addLayout(btn_layout)
-
-        if dlg.exec_() != QDialog.Accepted:
-            return None, None
-
-        selected_id = btn_group.checkedId()
-        if selected_id < 0:
-            return None, None
-
-        monitor_iface = ifaces[selected_id]['name']
-        # All other interfaces are protected
-        protected = [x['name'] for x in ifaces if x['name'] != monitor_iface]
-        keep_iface = protected[0] if protected else None
-
-        self._term_write(f"\n[WiFi] ATTACK adapter:    {monitor_iface}")
-        self._term_write(f"[WiFi] PROTECTED adapter: {keep_iface or 'none'}")
-        if keep_iface:
-            self._term_write(f"[WiFi] {keep_iface} will NEVER be touched.\n")
-
-        # Store protected iface name so the guard works everywhere
         self._protected_iface = keep_iface
 
-        return monitor_iface, keep_iface
+        self._term_write(f"\n[WiFi] Auto-detected adapters:")
+        for i in ifaces:
+            tag = "USB" if i['usb'] else "Internal"
+            conn = f"connected to {i['connected']}" if i['connected'] else "not connected"
+            role = "ATTACK" if i['name'] == attack['name'] else "PROTECTED"
+            self._term_write(f"  {i['name']} [{tag}] {i['driver']} — {conn} → {role}")
+
+        return attack['name'], keep_iface
 
     def _is_wifi_command(self, cmd):
         """Check if command involves WiFi tools that need monitor mode."""
@@ -1306,32 +1261,71 @@ class MaximWindow(QMainWindow):
             script.write(f"  sleep 2\n")
             script.write(f"fi\n\n")
 
-        # Quick scan to find BSSID+channel using iw (managed mode not needed —
-        # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
+        # Scan for target ESSID — parse airodump CSV robustly
         scan_csv = "/tmp/maxim_hscan"
         script.write(f"rm -f {scan_csv}-* 2>/dev/null\n")
         script.write(f"echo '[1/3] Scanning for {essid}...'\n")
         script.write("BSSID=''\nCHANNEL=''\n")
-        script.write("for i in 1 2 3; do\n")
-        script.write(f"  echo \"  Attempt $i/3\"\n")
-        script.write(f"  sudo timeout 15 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 1 {iface} >/dev/null 2>&1\n")
+        script.write("for i in 1 2 3 4 5; do\n")
+        script.write(f"  echo \"  Scan attempt $i/5\"\n")
+        script.write(f"  sudo timeout 20 airodump-ng -w '{scan_csv}' --output-format csv --write-interval 2 {iface} >/dev/null 2>&1\n")
         script.write(f"  CSV=$(ls -t {scan_csv}-*.csv 2>/dev/null | head -1)\n")
         script.write("  if [ -n \"$CSV\" ]; then\n")
-        # Match ESSID exactly (field 14 in airodump CSV, spaces trimmed)
-        # Use awk to match the trimmed 14th field exactly against the target ESSID
-        script.write(f"    LINE=$(awk -F, '{{ gsub(/^[ \\t]+|[ \\t]+$/, \"\", $14); if ($14 == \"{essid}\") print }}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1)\n")
-        script.write(f"    # Fallback: case-insensitive exact match\n")
-        script.write(f"    if [ -z \"$LINE\" ]; then LINE=$(awk -F, '{{ gsub(/^[ \\t]+|[ \\t]+$/, \"\", $14); if (tolower($14) == tolower(\"{essid}\")) print }}' \"$CSV\" | grep -E '^[0-9A-Fa-f]{{2}}:' | head -1); fi\n")
-        script.write("    if [ -n \"$LINE\" ]; then\n")
-        script.write("      BSSID=$(echo \"$LINE\" | cut -d, -f1 | tr -d ' ')\n")
-        script.write("      CH=$(echo \"$LINE\" | cut -d, -f4 | tr -d ' ')\n")
-        script.write("      if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
-        script.write("        CHANNEL=$CH\n")
+        script.write("    echo \"  Found CSV: $CSV\"\n")
+        script.write("    echo \"  Networks found:\"\n")
+        script.write("    grep -E '^[0-9A-Fa-f]{2}:' \"$CSV\" | head -20\n")
+        # Robust: find ESSID column index from header, then match exactly
+        # Airodump CSV header looks like: BSSID, First time seen, ..., ESSID, Key
+        # The ESSID is the last meaningful column before Key. Use the last comma-separated
+        # field that matches our target. Safest: iterate each data line, extract all fields,
+        # find which field contains EXACTLY our ESSID (trimmed).
+        script.write(f"    # Parse each line: find one where any field exactly matches '{essid}'\n")
+        script.write("    while IFS= read -r CSVLINE; do\n")
+        script.write("      # Skip non-BSSID lines\n")
+        script.write("      echo \"$CSVLINE\" | grep -qE '^[0-9A-Fa-f]{2}:' || continue\n")
+        script.write("      # Check if this line contains our ESSID as an exact field value\n")
+        script.write("      FOUND_ESSID=''\n")
+        script.write("      IFS=',' read -ra FIELDS <<< \"$CSVLINE\"\n")
+        script.write("      for F in \"${FIELDS[@]}\"; do\n")
+        script.write("        TRIMMED=$(echo \"$F\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write(f"        if [ \"$TRIMMED\" = '{essid}' ]; then\n")
+        script.write("          FOUND_ESSID='yes'\n")
+        script.write("          break\n")
+        script.write("        fi\n")
+        script.write("      done\n")
+        script.write("      if [ -n \"$FOUND_ESSID\" ]; then\n")
+        script.write("        BSSID=$(echo \"${FIELDS[0]}\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write("        CH=$(echo \"${FIELDS[3]}\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write("        if echo \"$CH\" | grep -qE '^-?[0-9]+$'; then\n")
+        script.write("          CH=${CH#-}\n")
+        script.write("          if [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then\n")
+        script.write("            CHANNEL=$CH\n")
+        script.write("          fi\n")
+        script.write("        fi\n")
+        script.write("        break\n")
         script.write("      fi\n")
+        script.write("    done < \"$CSV\"\n")
+        # Fallback: case-insensitive match if exact didn't work
+        script.write("    if [ -z \"$BSSID\" ]; then\n")
+        script.write("      while IFS= read -r CSVLINE; do\n")
+        script.write("        echo \"$CSVLINE\" | grep -qE '^[0-9A-Fa-f]{2}:' || continue\n")
+        script.write("        IFS=',' read -ra FIELDS <<< \"$CSVLINE\"\n")
+        script.write("        for F in \"${FIELDS[@]}\"; do\n")
+        script.write("          TRIMMED=$(echo \"$F\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write(f"          if [ \"${{TRIMMED,,}}\" = '{essid.lower()}' ]; then\n")
+        script.write("            BSSID=$(echo \"${FIELDS[0]}\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write("            CH=$(echo \"${FIELDS[3]}\" | sed 's/^[ \\t]*//;s/[ \\t]*$//')\n")
+        script.write("            CH=${CH#-}\n")
+        script.write("            if echo \"$CH\" | grep -qE '^[0-9]+$' && [ \"$CH\" -ge 1 ] && [ \"$CH\" -le 165 ]; then CHANNEL=$CH; fi\n")
+        script.write("            break 2\n")
+        script.write("          fi\n")
+        script.write("        done\n")
+        script.write("      done < \"$CSV\"\n")
         script.write("    fi\n")
         script.write("  fi\n")
         script.write(f"  rm -f {scan_csv}-* 2>/dev/null\n")
         script.write("  if [ -n \"$BSSID\" ] && [ -n \"$CHANNEL\" ]; then break; fi\n")
+        script.write("  echo \"  Not found yet, retrying...\"\n")
         script.write("done\n\n")
 
         script.write("if [ -z \"$BSSID\" ] || [ -z \"$CHANNEL\" ]; then\n")
