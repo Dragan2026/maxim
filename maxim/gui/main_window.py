@@ -1155,6 +1155,7 @@ class MaximWindow(QMainWindow):
 
                 # If it contains heredoc/EOF/cat>, run the whole thing directly
                 if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
+                    cleaned = self._fill_placeholders(cleaned, query)
                     self._term_write(f"⚡ Running command...\n")
                     self._execute_command(cleaned)
                     return
@@ -1176,6 +1177,8 @@ class MaximWindow(QMainWindow):
 
                 # Run all commands chained
                 cmd = " && ".join(commands)
+                # Replace any leftover {target}/{domain}/etc. placeholders
+                cmd = self._fill_placeholders(cmd, query)
                 self._term_write(f"⚡ Running: {cmd}\n")
                 self._execute_command(cmd)
             except Exception as e:
