@@ -1426,11 +1426,9 @@ class MaximWindow(QMainWindow):
         self._hs_capture_start = time.time()
         self._hs_essid_dir = essid_dir
         self._hs_essid_dir_path = essid_dir
+        # ONLY search inside THIS essid's directory — never pick up other networks' caps
         self._hs_wifite_dirs = [
             essid_dir,
-            os.path.expanduser("~/hs"),
-            os.path.expanduser("~/Desktop/MAXIMHASH"),
-            "/tmp",
         ]
         self._hs_poll_timer = QTimer()
         self._hs_poll_timer.timeout.connect(self._check_handshake_done)
