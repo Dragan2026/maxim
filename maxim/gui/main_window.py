@@ -1098,6 +1098,12 @@ class MaximWindow(QMainWindow):
             svc = svc_map.get(m.group(2), m.group(2))
             return f"sudo systemctl {m.group(1)} {svc}"
 
+        # ── System Power ──
+        if re.search(r'\b(restart|reboot)\s*(pc|computer|system|machine)?\s*(now)?\b', q):
+            return "sudo reboot"
+        if re.search(r'\b(shutdown|power\s*off|turn\s*off)\s*(pc|computer|system|machine)?\s*(now)?\b', q):
+            return "sudo shutdown -h now"
+
         # ── Misc ──
         if q in ('clear', 'cls'):
             return "clear"
