@@ -766,6 +766,60 @@ class MaximWindow(QMainWindow):
             self._execute_command(query)
             return
 
+        # 4b. Natural language CLI commands (open, start, launch, run, etc.)
+        # "open yahoo.com with mozilla" → firefox yahoo.com
+        # "open terminal" → x-terminal-emulator
+        # "start wireshark" → wireshark
+        open_match = re.search(
+            r'(?:open|launch|start|run|browse|go\s+to|visit|navigate\s+to)\s+(.+)',
+            q_lower
+        )
+        if open_match:
+            rest = open_match.group(1).strip()
+            # Browser mapping
+            browser_map = {
+                'mozilla': 'firefox', 'firefox': 'firefox', 'chrome': 'google-chrome',
+                'chromium': 'chromium', 'brave': 'brave-browser', 'opera': 'opera',
+                'edge': 'microsoft-edge', 'safari': 'safari', 'tor browser': 'torbrowser-launcher',
+            }
+            # Check if "with <browser>" is specified
+            browser_cmd = None
+            with_match = re.search(r'\s+(?:with|using|in|via)\s+(.+)$', rest)
+            if with_match:
+                browser_name = with_match.group(1).strip()
+                rest = rest[:with_match.start()].strip()
+                for key, cmd in browser_map.items():
+                    if key in browser_name:
+                        browser_cmd = cmd
+                        break
+                if not browser_cmd:
+                    browser_cmd = browser_name  # try as-is
+
+            # Check if the target is a URL/domain
+            url_target = rest.strip().strip('"\'')
+            is_url = bool(re.match(r'(?:https?://)?[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}', url_target))
+
+            if is_url:
+                if not url_target.startswith(('http://', 'https://')):
+                    url_target = f'http://{url_target}'
+                browser = browser_cmd or 'xdg-open'
+                self._execute_command(f"{browser} '{url_target}' &>/dev/null &")
+                return
+
+            # App/tool launch: "open wireshark", "start burpsuite", "launch terminal"
+            app_map = {
+                'terminal': 'x-terminal-emulator', 'term': 'x-terminal-emulator',
+                'file manager': 'thunar', 'files': 'thunar', 'nautilus': 'nautilus',
+                'text editor': 'mousepad', 'editor': 'mousepad', 'gedit': 'gedit',
+                'wireshark': 'wireshark', 'burp': 'burpsuite', 'burpsuite': 'burpsuite',
+                'metasploit': 'msfconsole', 'msf': 'msfconsole',
+                'calculator': 'galculator', 'calc': 'galculator',
+            }
+            app_name = url_target.lower()
+            app_cmd = app_map.get(app_name, app_name)
+            self._execute_command(f"{app_cmd} &>/dev/null &")
+            return
+
         # 5. Handshake capture / hack / crack WiFi workflow
         handshake_match = re.search(r'(?:capture|get|grab)\s+(?:the\s+)?handshake\s+(?:on|from|for|of)\s+(.+)', q_lower)
         if not handshake_match:
