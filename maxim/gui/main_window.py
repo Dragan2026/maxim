@@ -2145,6 +2145,7 @@ class MaximWindow(QMainWindow):
 
             thread.finished.connect(on_report_done)
             thread.start()
+            self._ai_thread = thread
         else:
             self._term_write(
                 "[!] AI not configured — cannot analyze results automatically.\n"
