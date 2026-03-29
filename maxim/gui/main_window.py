@@ -1431,6 +1431,12 @@ class MaximWindow(QMainWindow):
 
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_vulnscan_')
         script.write("#!/bin/bash\n\n")
+
+        # Cache sudo credentials at script start so all sudo commands work
+        if self.runner._sudo_password:
+            pw = self.runner._escape_pw()
+            script.write(f"echo '{pw}' | sudo -S -v 2>/dev/null\n\n")
+
         script.write(f"mkdir -p '{report_dir}'\n")
         script.write(f"REPORT='{report_file}'\n")
         script.write(f"TARGET='{target}'\n\n")
@@ -1438,7 +1444,7 @@ class MaximWindow(QMainWindow):
         script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n")
         script.write("echo '  MAXIM VULNERABILITY SCAN REPORT' | tee -a \"$REPORT\"\n")
         script.write(f"echo '  Target: {target}' | tee -a \"$REPORT\"\n")
-        script.write(f"echo '  Date: $(date)' | tee -a \"$REPORT\"\n")
+        script.write("echo \"  Date: $(date)\" | tee -a \"$REPORT\"\n")
         script.write("echo '════════════════════════════════════════════════════' | tee -a \"$REPORT\"\n\n")
 
         # Stage 1: Nmap service/version/OS detection
