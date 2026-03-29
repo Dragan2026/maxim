@@ -15,7 +15,7 @@ from functools import partial
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPlainTextEdit, QLineEdit, QPushButton, QLabel,
+    QTextEdit, QLineEdit, QPushButton, QLabel,
     QFrame, QComboBox, QMessageBox, QAction,
     QMenu, QMenuBar, QApplication, QInputDialog, QSplitter,
     QTextBrowser, QProgressBar, QFileDialog,
@@ -35,7 +35,7 @@ from maxim.tools.tool_registry import (
 import shlex
 
 
-class DropTerminal(QPlainTextEdit):
+class DropTerminal(QTextEdit):
     """Terminal that accepts drag & drop of files."""
     file_dropped = pyqtSignal(str)
 
@@ -165,7 +165,41 @@ class MaximWindow(QMainWindow):
 
     def _ask_sudo_password(self):
         self.runner.set_sudo_password("5505")
-        self.terminal.appendPlainText("[OK] Sudo password set.\n")
+        self._term_write("[OK] Sudo password set.\n")
+
+    # ── Color-coded terminal helpers ──
+
+    def _colorize_line(self, text):
+        """Return HTML for a single line with color coding."""
+        escaped = html.escape(text)
+        stripped = text.lstrip()
+        if (stripped.startswith("[OK]") or stripped.startswith("[✓]")
+                or "PASSWORD FOUND" in text or "KEY FOUND" in text or "Cracked" in text):
+            color = "#4ade80"
+        elif (stripped.startswith("[!]") or stripped.startswith("[ERROR]")
+              or stripped.startswith("[FAILED") or "FAILED" in text):
+            color = "#ef4444"
+        elif stripped.startswith("[WiFi]") or stripped.startswith("[AI]") or stripped.startswith("[Ghost"):
+            color = "#22d3ee"
+        elif "═" in text:
+            return f'<span style="color:#60a5fa;font-weight:bold">{escaped}</span>'
+        elif stripped.startswith("⚡"):
+            color = "#facc15"
+        elif re.match(r'\s*\[\d/', text):
+            color = "#c084fc"
+        elif "Running:" in text or "Running command" in text:
+            color = "#a1a1aa"
+        else:
+            color = "#4ade80"
+        return f'<span style="color:{color}">{escaped}</span>'
+
+    def _term_write(self, text):
+        """Append color-coded HTML text to the terminal."""
+        lines = text.split('\n')
+        html_parts = [self._colorize_line(line) for line in lines]
+        self.terminal.append('<br>'.join(html_parts))
+        scrollbar = self.terminal.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     # ═══════════════════════════════════════
     #  UI
@@ -355,7 +389,7 @@ class MaximWindow(QMainWindow):
         self.terminal.setFont(QFont("JetBrains Mono", 13))
         self.terminal.setPlaceholderText("Output will appear here...\n\nDrag & drop .cap, .pcap, .hash, or .txt files here to crack them")
         self.terminal.setStyleSheet("""
-            QPlainTextEdit {
+            QTextEdit {
                 background-color: #000000; color: #4ade80;
                 border: 1px solid #18181b; border-radius: 10px; padding: 14px;
                 font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
@@ -607,7 +641,7 @@ class MaximWindow(QMainWindow):
         if target_ip:
             target_ip = _sanitize_shell_arg(target_ip)
             if not target_ip:
-                self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+                self._term_write("\n[!] Invalid target — contains unsafe characters.\n")
                 return
 
             # ── Ping attacks ──
@@ -724,7 +758,7 @@ class MaximWindow(QMainWindow):
             if _sanitize_shell_arg(target):
                 self._full_vuln_scan(target)
             else:
-                self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+                self._term_write("\n[!] Invalid target — contains unsafe characters.\n")
             return
 
         # 4. Raw command (starts with a known tool binary)
@@ -767,14 +801,14 @@ class MaximWindow(QMainWindow):
                 else:
                     self._execute_command(f"{tool['name']} --help")
             else:
-                self.terminal.appendPlainText(
+                self._term_write(
                     f"\n[!] Don't know how to: {query}\n"
                     f"    Set up AI: AI menu > Set API Key.\n"
                 )
 
     def _ai_execute(self, query):
         self._set_running(True, f"⚡ AI thinking: {query[:50]}...")
-        self.terminal.appendPlainText(f"\n⚡ AI analyzing: {query}...\n")
+        self._term_write(f"\n⚡ AI analyzing: {query}...\n")
 
         thread = AIStreamSignal(self.ai, query)
 
@@ -782,7 +816,7 @@ class MaximWindow(QMainWindow):
             try:
                 self._set_running(False)
                 if response.startswith("[Error]") or response.startswith("[AI Error]"):
-                    self.terminal.appendPlainText(f"\n{response}\n")
+                    self._term_write(f"\n{response}\n")
                     return
 
                 # Clean response — remove markdown formatting
@@ -792,12 +826,12 @@ class MaximWindow(QMainWindow):
                 cleaned = cleaned.strip()
 
                 if not cleaned:
-                    self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                    self._term_write(f"\n[AI] {response}\n")
                     return
 
                 # If it contains heredoc/EOF/cat>, run the whole thing directly
                 if "<<" in cleaned or "EOF" in cleaned or "cat >" in cleaned:
-                    self.terminal.appendPlainText(f"⚡ Running command...\n")
+                    self._term_write(f"⚡ Running command...\n")
                     self._execute_command(cleaned)
                     return
 
@@ -813,15 +847,15 @@ class MaximWindow(QMainWindow):
                         commands.append(line)
 
                 if not commands:
-                    self.terminal.appendPlainText(f"\n[AI] {response}\n")
+                    self._term_write(f"\n[AI] {response}\n")
                     return
 
                 # Run all commands chained
                 cmd = " && ".join(commands)
-                self.terminal.appendPlainText(f"⚡ Running: {cmd}\n")
+                self._term_write(f"⚡ Running: {cmd}\n")
                 self._execute_command(cmd)
             except Exception as e:
-                self.terminal.appendPlainText(f"\n[Error] {e}\n")
+                self._term_write(f"\n[Error] {e}\n")
                 self._set_running(False)
 
         thread.finished.connect(on_done)
@@ -917,9 +951,9 @@ class MaximWindow(QMainWindow):
     def _start_monitor_mode(self, iface, keep_iface):
         """Start monitor mode on selected adapter using iw (safe — never kills NetworkManager).
         wlan1 stays untouched. Returns the monitor interface name."""
-        self.terminal.appendPlainText(f"\n[WiFi] Starting monitor mode on {iface}...\n")
+        self._term_write(f"\n[WiFi] Starting monitor mode on {iface}...\n")
         if keep_iface:
-            self.terminal.appendPlainText(f"[WiFi] {keep_iface} will NOT be touched.\n")
+            self._term_write(f"[WiFi] {keep_iface} will NOT be touched.\n")
 
         # Use ip/iw to put adapter in monitor mode — does NOT kill NetworkManager
         self.runner.run(f"sudo ip link set {iface} down")
@@ -929,17 +963,17 @@ class MaximWindow(QMainWindow):
         # Verify monitor mode
         code, out, _ = self.runner.run(f"sudo iw dev {iface} info")
         if "monitor" in out.lower():
-            self.terminal.appendPlainText(f"[WiFi] {iface} is now in monitor mode.\n")
+            self._term_write(f"[WiFi] {iface} is now in monitor mode.\n")
             mon_name = iface
         else:
             # Fallback: try airmon-ng (without check kill)
-            self.terminal.appendPlainText(f"[WiFi] iw failed, trying airmon-ng...\n")
+            self._term_write(f"[WiFi] iw failed, trying airmon-ng...\n")
             code, out, _ = self.runner.run(f"sudo airmon-ng start {iface}")
             if out.strip():
-                self.terminal.appendPlainText(out)
+                self._term_write(out)
             mon_name = self._detect_monitor_name(iface)
 
-        self.terminal.appendPlainText(f"[WiFi] Monitor interface: {mon_name}\n\n")
+        self._term_write(f"[WiFi] Monitor interface: {mon_name}\n\n")
         return mon_name
 
     def _restore_network(self):
@@ -966,7 +1000,7 @@ class MaximWindow(QMainWindow):
 
         target = _sanitize_shell_arg(target)
         if not target:
-            self.terminal.appendPlainText("\n[!] Invalid target — contains unsafe characters.\n")
+            self._term_write("\n[!] Invalid target — contains unsafe characters.\n")
             return
 
         report_dir = "/tmp/maxim_vulnscan"
@@ -974,12 +1008,12 @@ class MaximWindow(QMainWindow):
         safe_target = re.sub(r'[^a-zA-Z0-9._-]', '_', target)
         report_file = f"{report_dir}/{safe_target}_{ts}.txt"
 
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText(f"  FULL VULNERABILITY SCAN — {target}")
-        self.terminal.appendPlainText(f"{'═'*60}")
-        self.terminal.appendPlainText(f"  Tools: nmap, nikto, gobuster, whatweb, searchsploit")
-        self.terminal.appendPlainText(f"  Report: {report_file}")
-        self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._term_write(f"\n{'═'*60}")
+        self._term_write(f"  FULL VULNERABILITY SCAN — {target}")
+        self._term_write(f"{'═'*60}")
+        self._term_write(f"  Tools: nmap, nikto, gobuster, whatweb, searchsploit")
+        self._term_write(f"  Report: {report_file}")
+        self._term_write(f"{'═'*60}\n")
 
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_vulnscan_')
         script.write("#!/bin/bash\n\n")
@@ -1083,13 +1117,13 @@ class MaximWindow(QMainWindow):
         capture_prefix = f"{essid_dir}/{safe_essid}"
         signal_file = self._HS_SIGNAL_FILE
 
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURE: {essid}")
-        self.terminal.appendPlainText(f"  Tool: wifite  Adapter: {iface}")
-        self.terminal.appendPlainText(f"  Output:  {essid_dir}/")
-        self.terminal.appendPlainText(f"{'═'*60}")
-        self.terminal.appendPlainText(f"  wifite runs in external terminal")
-        self.terminal.appendPlainText(f"  When handshake captured → auto-crack here\n")
+        self._term_write(f"\n{'═'*60}")
+        self._term_write(f"  HANDSHAKE CAPTURE: {essid}")
+        self._term_write(f"  Tool: wifite  Adapter: {iface}")
+        self._term_write(f"  Output:  {essid_dir}/")
+        self._term_write(f"{'═'*60}")
+        self._term_write(f"  wifite runs in external terminal")
+        self._term_write(f"  When handshake captured → auto-crack here\n")
 
         # Reset guard flag
         self._hs_processing = False
@@ -1252,7 +1286,7 @@ class MaximWindow(QMainWindow):
                 self._hs_poll_timer.stop()
                 self._hs_essid_dir = None
                 self._hs_processing = False
-                self.terminal.appendPlainText(f"\n[!] Capture failed.\n")
+                self._term_write(f"\n[!] Capture failed.\n")
                 return
             if content == "DONE":
                 # wifite finished — do one final check for .cap files before giving up
@@ -1313,7 +1347,7 @@ class MaximWindow(QMainWindow):
                         os.remove(signal_file)
                     except Exception:
                         pass
-                    self.terminal.appendPlainText(f"\n[!] wifite finished but no handshake captured.\n")
+                    self._term_write(f"\n[!] wifite finished but no handshake captured.\n")
                     return
             return  # No valid handshake yet — keep polling
 
@@ -1346,12 +1380,12 @@ class MaximWindow(QMainWindow):
                     shutil.copy2(cap_file, dest_cap)
                     cap_file = dest_cap
             except Exception as e:
-                self.terminal.appendPlainText(f"  [!] Could not copy cap: {e}")
+                self._term_write(f"  [!] Could not copy cap: {e}")
 
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText(f"  HANDSHAKE CAPTURED — CRACKING NOW")
-        self.terminal.appendPlainText(f"  File: {cap_file}")
-        self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._term_write(f"\n{'═'*60}")
+        self._term_write(f"  HANDSHAKE CAPTURED — CRACKING NOW")
+        self._term_write(f"  File: {cap_file}")
+        self._term_write(f"{'═'*60}\n")
         self._hs_processing = False
         self._analyze_file(cap_file)
 
@@ -1372,7 +1406,7 @@ class MaximWindow(QMainWindow):
             if not getattr(self, '_wifi_adapter_selected', False):
                 iface, keep = self._select_wifi_adapter()
                 if iface is None:
-                    self.terminal.appendPlainText("\n[!] WiFi operation cancelled.\n")
+                    self._term_write("\n[!] WiFi operation cancelled.\n")
                     return
                 self._selected_wifi_iface = iface
                 self._keep_wifi_iface = keep
@@ -1406,9 +1440,9 @@ class MaximWindow(QMainWindow):
 
         self._set_running(True, f"Running: {cmd[:60]}...")
 
-        self.terminal.appendPlainText(f"\n{'─'*60}")
-        self.terminal.appendPlainText(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
-        self.terminal.appendPlainText(f"{'─'*60}\n")
+        self._term_write(f"\n{'─'*60}")
+        self._term_write(f" [{datetime.now().strftime('%H:%M:%S')}]  $ {cmd}")
+        self._term_write(f"{'─'*60}\n")
         scrollbar = self.terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -1432,6 +1466,7 @@ class MaximWindow(QMainWindow):
 
     def _on_output_line(self, line):
         is_progress = bool(self._PROGRESS_RE.search(line))
+        colored = self._colorize_line(line.rstrip('\n'))
 
         if is_progress and getattr(self, '_last_was_progress', False):
             # Overwrite the last line (simulate \r behavior)
@@ -1439,10 +1474,9 @@ class MaximWindow(QMainWindow):
             cursor.movePosition(QTextCursor.End)
             cursor.movePosition(QTextCursor.StartOfBlock, QTextCursor.KeepAnchor)
             cursor.removeSelectedText()
-            cursor.insertText(line.rstrip('\n'))
+            cursor.insertHtml(colored)
         else:
-            self.terminal.moveCursor(QTextCursor.End)
-            self.terminal.insertPlainText(line)
+            self.terminal.append(colored)
 
         self._last_was_progress = is_progress
         scrollbar = self.terminal.verticalScrollBar()
@@ -1450,7 +1484,7 @@ class MaximWindow(QMainWindow):
 
     def _on_command_done(self, cmd, exit_code, duration):
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
-        self.terminal.appendPlainText(f"\n[{status}] {duration:.1f}s\n")
+        self._term_write(f"\n[{status}] {duration:.1f}s\n")
         self._set_running(False)
         self.statusBar().showMessage(f"{status} -- {duration:.1f}s")
         scrollbar = self.terminal.verticalScrollBar()
@@ -1492,19 +1526,19 @@ class MaximWindow(QMainWindow):
         del self._vulnscan_report
         del self._vulnscan_target
 
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText("  AI ANALYZING SCAN RESULTS...")
-        self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._term_write(f"\n{'═'*60}")
+        self._term_write("  AI ANALYZING SCAN RESULTS...")
+        self._term_write(f"{'═'*60}\n")
         QApplication.processEvents()
 
         # Read the report file
         try:
             code, report_content, _ = self.runner.run(f"cat {shlex.quote(report_path)} 2>/dev/null")
             if not report_content or len(report_content.strip()) < 50:
-                self.terminal.appendPlainText("[!] Report is empty or too short for analysis.\n")
+                self._term_write("[!] Report is empty or too short for analysis.\n")
                 return
         except Exception:
-            self.terminal.appendPlainText("[!] Could not read scan report.\n")
+            self._term_write("[!] Could not read scan report.\n")
             return
 
         # Truncate if too long for AI context
@@ -1525,7 +1559,7 @@ class MaximWindow(QMainWindow):
             )
             self._ai_execute(prompt)
         else:
-            self.terminal.appendPlainText(
+            self._term_write(
                 "[!] AI not configured — cannot analyze results automatically.\n"
                 "    Set up AI: AI menu > Set API Key\n"
                 f"    Raw report saved at: {report_path}\n"
@@ -1540,7 +1574,7 @@ class MaximWindow(QMainWindow):
         if not m:
             m = re.search(r'\s(\S+\.\S+)', original_cmd)
         if not m:
-            self.terminal.appendPlainText("[!] Could not determine file to brute force\n")
+            self._term_write("[!] Could not determine file to brute force\n")
             return
         filepath = m.group(1)
 
@@ -1571,7 +1605,7 @@ class MaximWindow(QMainWindow):
                 return
 
             self._is_bruteforcing = True
-            self.terminal.appendPlainText("\n\n  BRUTE FORCING WPA HANDSHAKE...\n\n")
+            self._term_write("\n\n  BRUTE FORCING WPA HANDSHAKE...\n\n")
 
             script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_brute_')
             script.write("#!/bin/bash\n\n")
@@ -1620,7 +1654,7 @@ class MaximWindow(QMainWindow):
                 return
 
             self._is_bruteforcing = True
-            self.terminal.appendPlainText("\n\n  HASHCAT GPU BRUTE FORCE...\n\n")
+            self._term_write("\n\n  HASHCAT GPU BRUTE FORCE...\n\n")
             hm = hashcat_mode
             check = f"hashcat -m {hm} '{filepath}' --show 2>/dev/null | grep -v '^Hashfile' | grep -v 'Token length' | grep -v '^[*]' | grep -v '^$' | grep ':'"
 
@@ -1687,7 +1721,7 @@ class MaximWindow(QMainWindow):
         fmt_flag = f"--format={john_fmt} " if john_fmt else ""
 
         self._is_bruteforcing = True
-        self.terminal.appendPlainText("\n\n  JOHN BRUTE FORCE...\n\n")
+        self._term_write("\n\n  JOHN BRUTE FORCE...\n\n")
 
         check = f"john {fmt_flag}--show '{filepath}' 2>/dev/null | grep -v '^0 password' | grep -v '^$' | grep ':'"
 
@@ -1886,19 +1920,19 @@ class MaximWindow(QMainWindow):
 
         if ext in ('.cap', '.pcap'):
             wls = self._get_wordlists()
-            self.terminal.appendPlainText(f"\n⚡ Cracking WPA from {fname} using {len(wls)} wordlists:\n")
+            self._term_write(f"\n⚡ Cracking WPA from {fname} using {len(wls)} wordlists:\n")
             for wl in wls:
-                self.terminal.appendPlainText(f"  - {wl}\n")
-            self.terminal.appendPlainText("")
+                self._term_write(f"  - {wl}\n")
+            self._term_write("")
             self._execute_command(self._build_crack_cmd("aircrack", filepath))
 
         elif ext in ('.hc22000', '.hccapx'):
             wl_count = len(self._get_wordlists())
-            self.terminal.appendPlainText(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules)...\n")
+            self._term_write(f"\n⚡ Cracking {fname} with hashcat ({wl_count} wordlists + rules)...\n")
             self._execute_command(self._build_crack_cmd("hashcat", filepath, "22000"))
 
         elif ext in ('.txt', '.hash'):
-            self.terminal.appendPlainText(f"\n⚡ Auto-detecting hash type in {fname}...\n")
+            self._term_write(f"\n⚡ Auto-detecting hash type in {fname}...\n")
             try:
                 with open(filepath, 'r') as f:
                     first_line = f.readline().strip()
@@ -1906,7 +1940,7 @@ class MaximWindow(QMainWindow):
                 first_line = ""
 
             if not first_line:
-                self.terminal.appendPlainText("[!] Empty file\n")
+                self._term_write("[!] Empty file\n")
                 return
 
             wl_count = len(self._get_wordlists())
@@ -1914,7 +1948,7 @@ class MaximWindow(QMainWindow):
             # 1. Check prefix-based hash types
             for prefix, john_fmt, hc_mode, label, pref_tool in self.HASH_TYPES:
                 if first_line.startswith(prefix):
-                    self.terminal.appendPlainText(f"Detected: {label} — {wl_count} wordlists + rules\n")
+                    self._term_write(f"Detected: {label} — {wl_count} wordlists + rules\n")
                     if pref_tool == "hashcat" and hc_mode != "None":
                         self._execute_command(self._build_crack_cmd("hashcat", filepath, hc_mode))
                     else:
@@ -1930,18 +1964,18 @@ class MaximWindow(QMainWindow):
 
             if is_hex and hash_len in self.HASH_LENGTHS:
                 john_fmt, hc_mode, label = self.HASH_LENGTHS[hash_len]
-                self.terminal.appendPlainText(f"Detected: {label} ({hash_len} hex chars) — {wl_count} wordlists + rules\n")
+                self._term_write(f"Detected: {label} ({hash_len} hex chars) — {wl_count} wordlists + rules\n")
                 # Use hashcat for fast hashes (MD5, SHA1, SHA256, NTLM), john for others
                 if hash_len <= 64:
                     self._execute_command(self._build_crack_cmd("hashcat", filepath, hc_mode))
                 else:
                     self._execute_command(self._build_crack_cmd("john", filepath, john_fmt))
             else:
-                self.terminal.appendPlainText(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
+                self._term_write(f"Unknown hash type ({hash_len} chars) — trying john auto-detect\n")
                 self._execute_command(self._build_crack_cmd("john", filepath))
 
         elif ext in ('.csv', '.xml'):
-            self.terminal.appendPlainText(f"\n⚡ Showing {fname}...\n")
+            self._term_write(f"\n⚡ Showing {fname}...\n")
             self._execute_command(f"cat '{filepath}' | head -100")
 
         else:
@@ -1949,7 +1983,7 @@ class MaximWindow(QMainWindow):
 
     def _on_stop(self):
         self.runner.kill_all()
-        self.terminal.appendPlainText("\n[KILLED] Process terminated.\n")
+        self._term_write("\n[KILLED] Process terminated.\n")
         self._set_running(False)
 
     def _clear_terminal(self):
@@ -2214,26 +2248,26 @@ class MaximWindow(QMainWindow):
 
     def _enable_ghost_mode(self):
         self._ghost_mode = True
-        self.terminal.appendPlainText(f"\n{'═'*60}")
-        self.terminal.appendPlainText("  GHOST MODE — ACTIVATING")
-        self.terminal.appendPlainText(f"{'═'*60}\n")
+        self._term_write(f"\n{'═'*60}")
+        self._term_write("  GHOST MODE — ACTIVATING")
+        self._term_write(f"{'═'*60}\n")
         QApplication.processEvents()
 
         # Step 1: Start Tor
-        self.terminal.appendPlainText("[1/4] Starting Tor service...\n")
+        self._term_write("[1/4] Starting Tor service...\n")
         QApplication.processEvents()
         self.runner.run("sudo systemctl start tor")
 
         # Step 2: Verify Tor is running
         code, out, _ = self.runner.run("systemctl is-active tor")
         if "active" not in out:
-            self.terminal.appendPlainText("[!] Tor failed to start. Installing...\n")
+            self._term_write("[!] Tor failed to start. Installing...\n")
             QApplication.processEvents()
             self.runner.run("sudo apt-get install -y tor proxychains4")
             self.runner.run("sudo systemctl start tor")
 
         # Step 3: Configure proxychains for Tor
-        self.terminal.appendPlainText("[2/4] Configuring proxychains for Tor...\n")
+        self._term_write("[2/4] Configuring proxychains for Tor...\n")
         QApplication.processEvents()
         # Ensure proxychains uses Tor SOCKS5 on 9050
         self.runner.run(
@@ -2244,7 +2278,7 @@ class MaximWindow(QMainWindow):
         )
 
         # Step 4: Get Tor IP
-        self.terminal.appendPlainText("[3/4] Checking Tor exit IP...\n")
+        self._term_write("[3/4] Checking Tor exit IP...\n")
         QApplication.processEvents()
         code, real_ip, _ = self.runner.run("curl -s --max-time 5 ifconfig.me 2>/dev/null")
         real_ip = real_ip.strip()
@@ -2252,11 +2286,11 @@ class MaximWindow(QMainWindow):
         tor_ip = tor_ip.strip()
 
         if tor_ip and tor_ip != real_ip:
-            self.terminal.appendPlainText(f"[4/4] Ghost Mode ACTIVE\n")
-            self.terminal.appendPlainText(f"  Real IP:  {real_ip} (hidden)\n")
-            self.terminal.appendPlainText(f"  Tor IP:   {tor_ip}\n")
-            self.terminal.appendPlainText(f"  All commands routed through Tor.\n")
-            self.terminal.appendPlainText(f"  Local/WiFi tools bypass proxy automatically.\n\n")
+            self._term_write(f"[4/4] Ghost Mode ACTIVE\n")
+            self._term_write(f"  Real IP:  {real_ip} (hidden)\n")
+            self._term_write(f"  Tor IP:   {tor_ip}\n")
+            self._term_write(f"  All commands routed through Tor.\n")
+            self._term_write(f"  Local/WiFi tools bypass proxy automatically.\n\n")
 
             self.ghost_status.setText(f"GHOST: {tor_ip}")
             self.ghost_status.setStyleSheet(
@@ -2265,10 +2299,10 @@ class MaximWindow(QMainWindow):
             )
             self.ghost_status.show()
         else:
-            self.terminal.appendPlainText(f"[!] Tor connection failed — could not get Tor IP.\n")
-            self.terminal.appendPlainText(f"    Real IP: {real_ip}\n")
-            self.terminal.appendPlainText(f"    Tor returned: {tor_ip or '(empty)'}\n")
-            self.terminal.appendPlainText(f"    Check: sudo systemctl status tor\n\n")
+            self._term_write(f"[!] Tor connection failed — could not get Tor IP.\n")
+            self._term_write(f"    Real IP: {real_ip}\n")
+            self._term_write(f"    Tor returned: {tor_ip or '(empty)'}\n")
+            self._term_write(f"    Check: sudo systemctl status tor\n\n")
             self._ghost_mode = False
             return
 
@@ -2284,7 +2318,7 @@ class MaximWindow(QMainWindow):
 
     def _new_tor_identity(self):
         """Get a new Tor exit IP without restarting."""
-        self.terminal.appendPlainText("\n[Ghost] Requesting new Tor identity...\n")
+        self._term_write("\n[Ghost] Requesting new Tor identity...\n")
         QApplication.processEvents()
         # Send NEWNYM signal to Tor control port
         self.runner.run(
@@ -2296,15 +2330,15 @@ class MaximWindow(QMainWindow):
         code, tor_ip, _ = self.runner.run("proxychains4 -q curl -s --max-time 15 ifconfig.me 2>/dev/null")
         tor_ip = tor_ip.strip()
         if tor_ip:
-            self.terminal.appendPlainText(f"[Ghost] New Tor IP: {tor_ip}\n")
+            self._term_write(f"[Ghost] New Tor IP: {tor_ip}\n")
             if self._ghost_mode:
                 self.ghost_status.setText(f"GHOST: {tor_ip}")
         else:
-            self.terminal.appendPlainText("[Ghost] Could not verify new IP.\n")
+            self._term_write("[Ghost] Could not verify new IP.\n")
 
     def _disable_ghost_mode(self):
         self._ghost_mode = False
-        self.terminal.appendPlainText("\n[Ghost Mode] Disabled — commands now use real IP.\n")
+        self._term_write("\n[Ghost Mode] Disabled — commands now use real IP.\n")
 
         self.ghost_btn.setText("Ghost Mode: OFF")
         self.ghost_btn.setStyleSheet("""
