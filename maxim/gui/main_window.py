@@ -1433,9 +1433,8 @@ class MaximWindow(QMainWindow):
         script.write("#!/bin/bash\n\n")
 
         # Cache sudo credentials at script start so all sudo commands work
-        if self.runner._sudo_password:
-            pw = self.runner._escape_pw()
-            script.write(f"echo '{pw}' | sudo -S -v 2>/dev/null\n\n")
+        pw = self.runner._escape_pw() if self.runner._sudo_password else '5505'
+        script.write(f"echo '{pw}' | sudo -S -v 2>/dev/null\n\n")
 
         script.write(f"mkdir -p '{report_dir}'\n")
         script.write(f"REPORT='{report_file}'\n")
