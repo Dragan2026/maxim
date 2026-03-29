@@ -1452,14 +1452,14 @@ class MaximWindow(QMainWindow):
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write("echo '  [1/7] NMAP — Service & Version Detection' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write(f"echo \"$PW\" | sudo -S nmap -sV -sC -T4 --open -oN '{report_dir}/nmap_services.txt' \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
+        script.write(f"nmap -sV -sC -T4 --open -oN '{report_dir}/nmap_services.txt' \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
         # Stage 2: Nmap vulnerability scripts
         script.write("echo '' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
         script.write("echo '  [2/7] NMAP — Vulnerability Scripts' | tee -a \"$REPORT\"\n")
         script.write("echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' | tee -a \"$REPORT\"\n")
-        script.write(f"echo \"$PW\" | sudo -S nmap --script vuln -T4 \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
+        script.write(f"nmap --script vuln -T4 \"$TARGET\" 2>&1 | tee -a \"$REPORT\"\n\n")
 
         # Stage 3: Whatweb (tech fingerprinting)
         script.write("echo '' | tee -a \"$REPORT\"\n")
