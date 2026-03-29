@@ -869,47 +869,170 @@ class MaximWindow(QMainWindow):
     WIFI_TOOLS = {"airmon-ng", "airodump-ng", "aireplay-ng", "wifite", "wash", "reaver", "airbase-ng"}
 
     def _detect_wifi_interfaces(self):
-        """Detect available wireless interfaces."""
+        """Detect available wireless interfaces with details (driver, MAC, mode, connection)."""
+        ifaces = []
         try:
+            # Get interface names
             result = subprocess.run(
                 "iw dev 2>/dev/null | grep Interface | awk '{print $2}'",
                 shell=True, capture_output=True, text=True, timeout=5
             )
-            ifaces = [i.strip() for i in result.stdout.strip().split('\n') if i.strip()]
-            if not ifaces:
-                # Fallback: check /sys/class/net
+            names = [i.strip() for i in result.stdout.strip().split('\n') if i.strip()]
+            if not names:
                 result2 = subprocess.run(
                     "ls /sys/class/net/ | grep -E '^wl'",
                     shell=True, capture_output=True, text=True, timeout=5
                 )
-                ifaces = [i.strip() for i in result2.stdout.strip().split('\n') if i.strip()]
-            return ifaces
+                names = [i.strip() for i in result2.stdout.strip().split('\n') if i.strip()]
+
+            for name in names:
+                info = {'name': name, 'driver': '', 'mac': '', 'mode': '', 'connected': '', 'usb': False}
+                # Driver
+                try:
+                    r = subprocess.run(f"readlink /sys/class/net/{name}/device/driver 2>/dev/null",
+                                       shell=True, capture_output=True, text=True, timeout=3)
+                    if r.stdout.strip():
+                        info['driver'] = os.path.basename(r.stdout.strip())
+                except Exception:
+                    pass
+                # USB check
+                try:
+                    r = subprocess.run(f"readlink -f /sys/class/net/{name}/device 2>/dev/null",
+                                       shell=True, capture_output=True, text=True, timeout=3)
+                    info['usb'] = '/usb' in r.stdout.lower()
+                except Exception:
+                    pass
+                # MAC address
+                try:
+                    r = subprocess.run(f"cat /sys/class/net/{name}/address 2>/dev/null",
+                                       shell=True, capture_output=True, text=True, timeout=3)
+                    info['mac'] = r.stdout.strip()
+                except Exception:
+                    pass
+                # Current mode (managed/monitor)
+                try:
+                    r = subprocess.run(f"iw dev {name} info 2>/dev/null",
+                                       shell=True, capture_output=True, text=True, timeout=3)
+                    for line in r.stdout.split('\n'):
+                        if 'type' in line.lower():
+                            info['mode'] = line.split()[-1] if line.split() else ''
+                except Exception:
+                    pass
+                # Connected SSID (via nmcli)
+                try:
+                    r = subprocess.run(f"nmcli -t -f DEVICE,STATE,CONNECTION device 2>/dev/null | grep '^{name}:'",
+                                       shell=True, capture_output=True, text=True, timeout=3)
+                    parts = r.stdout.strip().split(':')
+                    if len(parts) >= 3 and parts[1] == 'connected':
+                        info['connected'] = parts[2]
+                except Exception:
+                    pass
+                ifaces.append(info)
         except Exception:
-            return []
+            pass
+        return ifaces
 
     def _select_wifi_adapter(self):
-        """Auto-select WiFi adapter for monitor mode.
-        wlan0 = USB adapter (attack/monitor mode)
-        wlan1 = integrated adapter (NEVER touch)
+        """Show adapter picker dialog. User chooses which is MONITOR (attack)
+        and which is MANAGED (protected — never touched).
         Returns (monitor_iface, keep_iface)."""
         ifaces = self._detect_wifi_interfaces()
 
         if not ifaces:
             QMessageBox.warning(self, "No WiFi Adapter",
-                "No wireless interfaces found.\n\nMake sure an external WiFi adapter is connected.")
+                "No wireless interfaces found.\n\nMake sure a WiFi adapter is connected.")
             return None, None
 
+        # If only one adapter, no choice needed
         if len(ifaces) == 1:
-            return ifaces[0], None
+            return ifaces[0]['name'], None
 
-        # wlan0 = USB adapter (use for monitor mode)
-        # wlan1 = integrated adapter (never touch)
-        if "wlan0" in ifaces:
-            keep = "wlan1" if "wlan1" in ifaces else None
-            return "wlan0", keep
+        # Build dialog
+        from PyQt5.QtWidgets import QDialog, QRadioButton, QButtonGroup, QGroupBox, QGridLayout
 
-        # Fallback: pick first available
-        return ifaces[0], ifaces[1] if len(ifaces) > 1 else None
+        dlg = QDialog(self)
+        dlg.setWindowTitle("WiFi Adapter Setup")
+        dlg.setMinimumWidth(520)
+        dlg.setStyleSheet("""
+            QDialog { background: #0a0a0a; color: #e4e4e7; }
+            QGroupBox { color: #a1a1aa; border: 1px solid #27272a; border-radius: 6px;
+                         margin-top: 12px; padding: 14px 10px 10px 10px; font-size: 13px; }
+            QGroupBox::title { subcontrol-position: top left; padding: 2px 8px; }
+            QRadioButton { color: #e4e4e7; font-size: 13px; padding: 6px; }
+            QRadioButton::indicator { width: 14px; height: 14px; }
+            QLabel { color: #a1a1aa; font-size: 12px; }
+            QPushButton { background: #dc2626; color: white; border: none; border-radius: 4px;
+                          padding: 8px 24px; font-weight: bold; font-size: 13px; }
+            QPushButton:hover { background: #ef4444; }
+            QPushButton:disabled { background: #52525b; color: #71717a; }
+        """)
+
+        layout = QVBoxLayout(dlg)
+
+        # Header
+        header = QLabel("Select which adapter to use for ATTACK (monitor mode).\n"
+                        "The other adapter stays in managed mode and is PROTECTED.")
+        header.setStyleSheet("color: #fbbf24; font-size: 13px; font-weight: bold; padding: 4px;")
+        layout.addWidget(header)
+
+        # Adapter radio buttons
+        group = QGroupBox("WiFi Adapters Detected")
+        grid = QGridLayout(group)
+        btn_group = QButtonGroup(dlg)
+
+        for i, ifc in enumerate(ifaces):
+            tag = "USB" if ifc['usb'] else "Internal"
+            conn_str = f" — Connected to: {ifc['connected']}" if ifc['connected'] else " — Not connected"
+            label = f"{ifc['name']}  [{tag}]  {ifc['driver']}  ({ifc['mac']}){conn_str}"
+            rb = QRadioButton(label)
+            rb.setProperty('iface_name', ifc['name'])
+            btn_group.addButton(rb, i)
+            grid.addWidget(rb, i, 0)
+
+            # Pre-select: prefer USB adapter that is NOT connected as the attack adapter
+            if ifc['usb'] and not ifc['connected']:
+                rb.setChecked(True)
+            elif i == 0 and not any(x['usb'] and not x['connected'] for x in ifaces):
+                # Fallback: select first if no obvious USB candidate
+                rb.setChecked(True)
+
+        layout.addWidget(group)
+
+        # Warning about protected adapter
+        warn = QLabel("The adapter NOT selected above will be PROTECTED.\n"
+                      "MAXIM will never put it in monitor mode or disconnect it.")
+        warn.setStyleSheet("color: #22c55e; font-size: 12px; padding: 6px;")
+        layout.addWidget(warn)
+
+        # OK button
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("CONFIRM")
+        ok_btn.clicked.connect(dlg.accept)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return None, None
+
+        selected_id = btn_group.checkedId()
+        if selected_id < 0:
+            return None, None
+
+        monitor_iface = ifaces[selected_id]['name']
+        # All other interfaces are protected
+        protected = [x['name'] for x in ifaces if x['name'] != monitor_iface]
+        keep_iface = protected[0] if protected else None
+
+        self._term_write(f"\n[WiFi] ATTACK adapter:    {monitor_iface}")
+        self._term_write(f"[WiFi] PROTECTED adapter: {keep_iface or 'none'}")
+        if keep_iface:
+            self._term_write(f"[WiFi] {keep_iface} will NEVER be touched.\n")
+
+        # Store protected iface name so the guard works everywhere
+        self._protected_iface = keep_iface
+
+        return monitor_iface, keep_iface
 
     def _is_wifi_command(self, cmd):
         """Check if command involves WiFi tools that need monitor mode."""
@@ -977,18 +1100,27 @@ class MaximWindow(QMainWindow):
         return mon_name
 
     def _restore_network(self):
-        """Restore wlan0 from monitor mode back to managed. Never touches wlan1."""
+        """Restore attack adapter from monitor mode back to managed. Protected adapter never touched."""
         mon = getattr(self, '_monitor_iface_name', None)
+        protected = getattr(self, '_protected_iface', None)
         self._wifi_adapter_selected = False
         self._monitor_iface_name = None
-        # Restore wlan0 to managed mode using iw (safe — doesn't affect wlan1)
-        restore_iface = mon or "wlan0"
-        self._execute_command(
+        restore_iface = mon or getattr(self, '_selected_wifi_iface', None) or "wlan0"
+        cmd = (
             f"sudo ip link set {restore_iface} down 2>/dev/null; "
             f"sudo iw dev {restore_iface} set type managed 2>/dev/null; "
             f"sudo ip link set {restore_iface} up 2>/dev/null; "
             f"echo '[OK] {restore_iface} restored to managed mode'"
         )
+        # Also verify protected adapter is still connected
+        if protected:
+            cmd += (
+                f"; PSTATE=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep '^{protected}:' | cut -d: -f2); "
+                f"if [ \"$PSTATE\" != 'connected' ]; then "
+                f"sudo nmcli device connect {protected} 2>/dev/null; "
+                f"echo '[GUARD] Reconnected {protected}'; fi"
+            )
+        self._execute_command(cmd)
 
     # ═══════════════════════════════════════
     #  VULNERABILITY SCAN PIPELINE
@@ -1102,15 +1234,18 @@ class MaximWindow(QMainWindow):
     _HS_SIGNAL_FILE = "/tmp/maxim_hs_done"
 
     def _capture_handshake(self, essid):
-        """Handshake capture using wifite: scan+capture+deauth all automatic.
+        """Handshake capture: scan+capture+deauth all automatic.
         Runs in external terminal. Poller watches for .cap with valid handshake,
         then kills terminal and cracks in MAXIM output window.
-        Auto-detects USB WiFi adapter. Integrated adapter NEVER touched."""
+        Uses adapter picker — protected adapter NEVER touched."""
         import tempfile
 
-        # wlan0 = USB WiFi adapter (monitor mode / attack)
-        # wlan1 = integrated adapter (connected to network — NEVER touch)
-        iface = "wlan0"
+        # Use adapter picker to choose attack vs protected interface
+        iface, keep_iface = self._select_wifi_adapter()
+        if iface is None:
+            self._term_write("\n[!] Handshake capture cancelled — no adapter selected.\n")
+            return
+
         out_dir = os.path.expanduser("~/Desktop/MAXIMHASH")
         safe_essid = essid.replace(' ', '_').replace("'", "").replace('"', '')
         essid_dir = f"{out_dir}/{safe_essid}"
@@ -1119,10 +1254,11 @@ class MaximWindow(QMainWindow):
 
         self._term_write(f"\n{'═'*60}")
         self._term_write(f"  HANDSHAKE CAPTURE: {essid}")
-        self._term_write(f"  Tool: wifite  Adapter: {iface}")
+        self._term_write(f"  ATTACK adapter:    {iface}")
+        self._term_write(f"  PROTECTED adapter: {keep_iface or 'none'}")
         self._term_write(f"  Output:  {essid_dir}/")
         self._term_write(f"{'═'*60}")
-        self._term_write(f"  wifite runs in external terminal")
+        self._term_write(f"  Capture runs in external terminal")
         self._term_write(f"  When handshake captured → auto-crack here\n")
 
         # Reset guard flag
@@ -1134,31 +1270,41 @@ class MaximWindow(QMainWindow):
         except FileNotFoundError:
             pass
 
-        # wlan1 = integrated adapter (connected — never touch for monitor mode)
-        other_iface = "wlan1"
-
-        # Manual airodump + aireplay — NO wifite, NO airmon-ng, NO --kill
-        # Only touches wlan0. wlan1 and NetworkManager completely untouched.
         script = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix='maxim_hs_')
         script.write("#!/bin/bash\n")
         script.write("echo '5505' | sudo -S -v 2>/dev/null\n")
         script.write(f"mkdir -p '{essid_dir}'\n")
         script.write(f"rm -f '{signal_file}'\n\n")
 
-        # Monitor mode on wlan0 only
+        # SAFETY GUARD: protect the managed adapter — abort if anything tries to touch it
+        if keep_iface:
+            script.write(f"# ═══ PROTECTED ADAPTER GUARD ═══\n")
+            script.write(f"PROTECTED_IFACE='{keep_iface}'\n")
+            script.write(f"# Snapshot protected adapter state so we can restore if something goes wrong\n")
+            script.write(f"PROTECTED_STATE=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep \"^$PROTECTED_IFACE:\" | cut -d: -f2)\n")
+            script.write(f"echo \"[GUARD] $PROTECTED_IFACE is $PROTECTED_STATE — will NOT be touched\"\n\n")
+
+        # Monitor mode on attack adapter only
         script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
         script.write(f"sudo iw dev {iface} set type monitor 2>/dev/null\n")
         script.write(f"sudo ip link set {iface} up 2>/dev/null\n\n")
 
-        # Kill ONLY processes bound to the attack interface — never the shared daemon
-        # wpa_supplicant often runs as a single process for ALL interfaces;
-        # pkill would kill it for wlan1 too → all networks die.
-        # Instead, use nmcli to disconnect only the attack interface, or skip if not managed.
-        script.write(f"# Disconnect {iface} from NetworkManager without killing shared daemons\n")
+        # Disconnect ONLY the attack adapter from NetworkManager — never kill shared daemons
+        script.write(f"# Disconnect {iface} from NetworkManager (safe — does not affect {keep_iface or 'other adapters'})\n")
         script.write(f"sudo nmcli device disconnect {iface} 2>/dev/null || true\n")
         script.write(f"# Only kill dhclient/dhcpcd that are specifically for {iface}\n")
         script.write(f"DHPID=$(pgrep -f 'dhclient.*{iface}' 2>/dev/null); [ -n \"$DHPID\" ] && sudo kill $DHPID 2>/dev/null || true\n")
         script.write(f"DHPID=$(pgrep -f 'dhcpcd.*{iface}' 2>/dev/null); [ -n \"$DHPID\" ] && sudo kill $DHPID 2>/dev/null || true\n\n")
+
+        # After monitor mode setup, verify protected adapter is still up
+        if keep_iface:
+            script.write(f"# Verify protected adapter is still connected\n")
+            script.write(f"PSTATE=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep \"^$PROTECTED_IFACE:\" | cut -d: -f2)\n")
+            script.write(f"if [ \"$PSTATE\" != \"connected\" ] && [ \"$PROTECTED_STATE\" = \"connected\" ]; then\n")
+            script.write(f"  echo '[!] PROTECTED adapter dropped! Reconnecting...'\n")
+            script.write(f"  sudo nmcli device connect $PROTECTED_IFACE 2>/dev/null\n")
+            script.write(f"  sleep 2\n")
+            script.write(f"fi\n\n")
 
         # Quick scan to find BSSID+channel using iw (managed mode not needed —
         # we can use airodump silently since wlan0 is the USB adapter, not connected to anything)
@@ -1232,6 +1378,19 @@ class MaximWindow(QMainWindow):
         script.write(f"echo '[3/3] Capturing...'\n")
         script.write(f"sudo airodump-ng -c $CHANNEL --bssid $BSSID -w '{capture_prefix}' --output-format pcap,csv {iface}\n\n")
         script.write("kill $DEAUTH_PID 2>/dev/null\n")
+        # Restore attack adapter to managed mode
+        script.write(f"\n# ═══ CLEANUP: restore {iface} to managed mode ═══\n")
+        script.write(f"sudo ip link set {iface} down 2>/dev/null\n")
+        script.write(f"sudo iw dev {iface} set type managed 2>/dev/null\n")
+        script.write(f"sudo ip link set {iface} up 2>/dev/null\n")
+        script.write(f"echo '[OK] {iface} restored to managed mode'\n")
+        # Final guard: make sure protected adapter is still up
+        if keep_iface:
+            script.write(f"PSTATE=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | grep \"^$PROTECTED_IFACE:\" | cut -d: -f2)\n")
+            script.write(f"if [ \"$PSTATE\" != \"connected\" ]; then\n")
+            script.write(f"  sudo nmcli device connect $PROTECTED_IFACE 2>/dev/null\n")
+            script.write(f"  echo '[GUARD] Reconnected $PROTECTED_IFACE'\n")
+            script.write(f"fi\n")
         script.write(f"echo 'DONE' > '{signal_file}'\n")
         script.write("echo 'Capture stopped.'\nread -p 'Press Enter to close'\n")
 
