@@ -2094,16 +2094,24 @@ class MaximWindow(QMainWindow):
 
         if self.ai and self.ai.is_available():
             prompt = (
-                f"Pentest report for {target}. Analyze scan data and write a SHORT clean report. "
-                f"Do NOT repeat raw output. No duplicates.\n\n"
+                f"Pentest report for {target}. Focus on the MOST CRITICAL and EASILY EXPLOITABLE findings. "
+                f"No raw output. No duplicates. No filler.\n\n"
                 f"{report_content}\n\n"
-                f"Write report with these sections:\n"
-                f"TARGET: IP, server software + version\n"
-                f"PORTS: PORT | SERVICE | VERSION (table)\n"
-                f"VULNS: severity, CVE, 1-line description, exploit command for each\n"
-                f"EXPLOIT COMMANDS: ready-to-run commands (wpscan/metasploit/nuclei/curl)\n"
-                f"FIXES: prioritized list\n"
-                f"Output ONLY report text, not shell commands to execute."
+                f"Write this report:\n\n"
+                f"TARGET: IP, server + exact version, CMS + version, OS if detected\n\n"
+                f"OPEN PORTS:\n"
+                f"PORT | SERVICE | VERSION for each open port\n\n"
+                f"CRITICAL FINDINGS (most dangerous first):\n"
+                f"For each finding: [CRITICAL/HIGH/MEDIUM] CVE-XXXX — description\n"
+                f"→ Exploit: exact copy-paste command\n"
+                f"Focus on: outdated software with known CVEs, exposed admin panels, "
+                f"default creds, SQL injection, RCE, file upload, LFI/RFI, XSS, "
+                f"missing auth, weak SSL/TLS, info disclosure.\n"
+                f"For every service version found, list known CVEs from your knowledge.\n\n"
+                f"QUICK WINS (easiest exploits to run right now):\n"
+                f"Numbered list of exact commands — wpscan, metasploit, sqlmap, nuclei, curl, searchsploit.\n"
+                f"Example: wpscan --url https://{target} --enumerate vp,vt,u --api-token YOUR_TOKEN\n\n"
+                f"Output ONLY the report. Not shell commands to execute."
             )
             # Display-only AI call — do NOT use _ai_execute which tries to run response as commands
             self._set_running(True, "AI writing vulnerability report...")
