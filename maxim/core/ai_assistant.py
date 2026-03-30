@@ -249,7 +249,7 @@ class OllamaAI:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=300) as resp:
                 if stream_callback:
                     full_response = []
                     for line in resp:
@@ -349,7 +349,7 @@ class OnlineAI:
         )
 
         try:
-            resp = urllib.request.urlopen(req, timeout=120)
+            resp = urllib.request.urlopen(req, timeout=300)
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8", errors="replace")
             try:

@@ -2088,9 +2088,29 @@ class MaximWindow(QMainWindow):
             self._term_write("[!] Could not read scan report.\n")
             return
 
-        # Truncate to avoid AI timeout — keep only the important parts
-        if len(report_content) > 5000:
-            report_content = report_content[:5000] + "\n[...truncated...]"
+        # Extract only the important lines to avoid AI timeout
+        important_lines = []
+        for line in report_content.split('\n'):
+            l = line.strip()
+            # Skip empty lines, decorative lines, timing lines
+            if not l or all(c in '━═─' for c in l) or 'tee -a' in l:
+                continue
+            # Keep lines with useful info
+            if any(kw in l.lower() for kw in [
+                'open', 'port', 'tcp', 'udp', 'http', 'ssh', 'ftp', 'smtp', 'ssl',
+                'server:', 'apache', 'nginx', 'php', 'mysql', 'wordpress', 'wp-',
+                'vulnerable', 'vuln', 'cve', 'exploit', 'version', 'banner',
+                'header', 'missing', 'found', 'detected', 'running', 'service',
+                'target', 'resolved', 'nmap', 'nikto', 'whatweb', 'searchsploit',
+                'certificate', 'cipher', 'tls', 'elementor', 'jquery', 'plugin',
+                'x-powered', 'x-server', 'x-redirect', 'content-type', 'strict-transport',
+                'permissions-policy', 'referrer-policy', 'x-frame', 'x-xss', 'x-content',
+                'country', 'ip[', 'redirect', 'location', 'title', '/open',
+            ]):
+                important_lines.append(l)
+        report_content = '\n'.join(important_lines)
+        if len(report_content) > 3500:
+            report_content = report_content[:3500] + "\n[...truncated...]"
 
         if self.ai and self.ai.is_available():
             prompt = (
