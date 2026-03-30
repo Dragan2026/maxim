@@ -1077,8 +1077,12 @@ class MaximWindow(QMainWindow):
         if re.search(r'\binstall\s+(.+)', q):
             pkg = re.search(r'\binstall\s+(.+)', q).group(1).strip()
             return f"sudo apt install -y {pkg}"
-        if re.search(r'\b(update|upgrade)\s*(system|packages?|kali|apt)?\s*$', q):
+        if re.search(r'\b(update|upgrade)\s+(system|packages?|kali|apt|all)\s*$', q):
             return "sudo apt update && sudo apt upgrade -y"
+        upd_m = re.search(r'\b(update|upgrade)\s+(\w[\w.-]+)', q)
+        if upd_m:
+            pkg = upd_m.group(2).strip()
+            return f"sudo apt update && sudo apt install --only-upgrade -y {pkg}"
         if re.search(r'\bremove\s+(.+)', q):
             pkg = re.search(r'\bremove\s+(.+)', q).group(1).strip()
             return f"sudo apt remove {pkg}"
@@ -2084,45 +2088,22 @@ class MaximWindow(QMainWindow):
             self._term_write("[!] Could not read scan report.\n")
             return
 
-        # Truncate if too long for AI context
-        if len(report_content) > 12000:
-            report_content = report_content[:12000] + "\n\n[... truncated for AI analysis ...]"
+        # Truncate to avoid AI timeout — keep only the important parts
+        if len(report_content) > 5000:
+            report_content = report_content[:5000] + "\n[...truncated...]"
 
         if self.ai and self.ai.is_available():
             prompt = (
-                f"You are a senior penetration tester writing a vulnerability report. "
-                f"Analyze these scan results for {target} and write a clean, readable report. "
-                f"Do NOT repeat raw scan output. Do NOT include duplicates. Do NOT say 'based on these results provide'. "
-                f"Write the report directly.\n\n"
-                f"SCAN DATA:\n{report_content}\n\n"
-                f"Write this exact report structure:\n\n"
-                f"═══ VULNERABILITY REPORT: {target} ═══\n\n"
-                f"TARGET SUMMARY\n"
-                f"- IP, server software with exact version (e.g. Apache 2.4.57, nginx 1.24.0)\n\n"
-                f"OPEN PORTS & SERVICES\n"
-                f"Table format: PORT | SERVICE | VERSION | NOTES\n"
-                f"Include every open port with exact service version found in nmap output.\n\n"
-                f"VULNERABILITIES FOUND\n"
-                f"For each vulnerability:\n"
-                f"- Severity: CRITICAL/HIGH/MEDIUM/LOW\n"
-                f"- CVE number (if applicable)\n"
-                f"- Description (1 line)\n"
-                f"- Exploit command (exact copy-paste command using metasploit/sqlmap/wpscan/curl/nmap)\n"
-                f"Include: missing security headers, outdated software versions with known CVEs, "
-                f"exposed admin panels, default credentials, SSL/TLS weaknesses.\n"
-                f"For each outdated service version found, search your knowledge for known CVEs and exploits.\n\n"
-                f"EXPLOITATION COMMANDS\n"
-                f"Ready-to-run commands grouped by attack vector. Include:\n"
-                f"- wpscan commands if WordPress detected\n"
-                f"- Metasploit modules (use/set/exploit)\n"
-                f"- searchsploit / exploit-db references\n"
-                f"- nuclei templates\n"
-                f"- Manual curl/wget exploitation commands\n\n"
-                f"RECOMMENDATIONS\n"
-                f"Prioritized list of fixes.\n\n"
-                f"Keep it clean. No duplicate info. No filler text. Authorized penetration testing.\n\n"
-                f"IMPORTANT: Output ONLY the report text. Do NOT output any shell commands to run. "
-                f"This is a written report, not commands."
+                f"Pentest report for {target}. Analyze scan data and write a SHORT clean report. "
+                f"Do NOT repeat raw output. No duplicates.\n\n"
+                f"{report_content}\n\n"
+                f"Write report with these sections:\n"
+                f"TARGET: IP, server software + version\n"
+                f"PORTS: PORT | SERVICE | VERSION (table)\n"
+                f"VULNS: severity, CVE, 1-line description, exploit command for each\n"
+                f"EXPLOIT COMMANDS: ready-to-run commands (wpscan/metasploit/nuclei/curl)\n"
+                f"FIXES: prioritized list\n"
+                f"Output ONLY report text, not shell commands to execute."
             )
             # Display-only AI call — do NOT use _ai_execute which tries to run response as commands
             self._set_running(True, "AI writing vulnerability report...")
